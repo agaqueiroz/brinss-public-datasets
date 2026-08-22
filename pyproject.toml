@@ -1,0 +1,37 @@
+[project]
+name = "brinss-public-datasets"
+version = "0.1.0"
+description = "Carregamento e cache de datasets abertos do INSS, no estilo load_iris() do scikit-learn"
+readme = "README.md"
+authors = [
+    { name = "André Galindo Alves de Queiroz", email = "andre.gqueiroz@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "openpyxl>=3.1",
+    "pandas>=2.2",
+    "platformdirs>=4.0",
+    "pooch>=1.8",
+    "requests>=2.31",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "responses>=0.25",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "brinss"
+
+[tool.pytest.ini_options]
+markers = [
+    "network: requires internet access (deselected by default)",
+]
+addopts = "-m 'not network'"
