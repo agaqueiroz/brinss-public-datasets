@@ -75,15 +75,16 @@ calculado e guardado localmente, e passa a ser conferido nas chamadas
 seguintes (detectando automaticamente se o governo trocar o conteúdo de um
 arquivo sem trocar o nome).
 
-## Limitações conhecidas (fora de escopo por enquanto)
+## To-do
 
-- Cobre apenas os pacotes "Plano de Dados Abertos" atuais (mensal, XLSX, a
-  partir de jun/2023). O portal também publica séries históricas mais antigas
-  (2012–2023) em arquivos ZIP com granularidade anual, e uma segunda camada
-  de pacotes legados (`inss-beneficios-*`, até mai/2023, mistura de
-  ZIP/CSV/JSON/XML) — nenhum dos dois é suportado ainda.
-- `brinss.ops` está reservado para um futuro conjunto de funções de
-  transformação/análise sobre os datasets carregados; ainda não implementado.
+- [ ] Suportar as séries históricas mais antigas (2012–2023), publicadas em
+      arquivos ZIP com granularidade anual (ex: `beneficios-concedidos-dez-2012-a-nov-2018-...`).
+- [ ] Suportar a segunda camada de pacotes legados (`inss-beneficios-*`, até
+      mai/2023), com mistura de formatos ZIP/CSV/JSON/XML e múltiplas
+      categorias por mês (ex: ativos/suspensos/cessados em "mantidos").
+- [ ] Implementar `brinss.ops`: funções de transformação/análise sobre os
+      datasets carregados (hoje é só um namespace reservado, vazio).
+- [x] Adicionar tópicos ao repositório no GitHub, para facilitar descoberta.
 
 ## Desenvolvimento
 
