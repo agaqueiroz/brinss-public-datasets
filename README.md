@@ -77,6 +77,7 @@ arquivo sem trocar o nome).
 
 ## To-do
 
+- [x] Adicionar tópicos ao repositório no GitHub, para facilitar descoberta.
 - [ ] Suportar as séries históricas mais antigas (2012–2023), publicadas em
       arquivos ZIP com granularidade anual (ex: `beneficios-concedidos-dez-2012-a-nov-2018-...`).
 - [ ] Suportar a segunda camada de pacotes legados (`inss-beneficios-*`, até
@@ -84,7 +85,6 @@ arquivo sem trocar o nome).
       categorias por mês (ex: ativos/suspensos/cessados em "mantidos").
 - [ ] Implementar `brinss.ops`: funções de transformação/análise sobre os
       datasets carregados (hoje é só um namespace reservado, vazio).
-- [x] Adicionar tópicos ao repositório no GitHub, para facilitar descoberta.
 
 ## Desenvolvimento
 
