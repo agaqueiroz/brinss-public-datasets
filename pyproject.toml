@@ -3,6 +3,8 @@ name = "brinss-public-datasets"
 version = "0.1.0"
 description = "Carregamento e cache de datasets abertos do INSS, no estilo load_iris() do scikit-learn"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "André Galindo Alves de Queiroz", email = "andre.gqueiroz@gmail.com" }
 ]
