@@ -294,3 +294,48 @@ def test_read_resource_dtype_combines_with_columns(tmp_path, make_csv_bytes):
 
     assert list(df.columns) == ["periodo_referencia", "codigo"]
     assert list(df["codigo"]) == ["01234", "00987"]
+
+
+# The portal publishes CSVs in cp1252/latin-1 as often as in UTF-8, and
+# statistical detection over a leading sample used to answer "cp1250" for
+# short Portuguese text -- reading without error but mangling every accent.
+ACCENTED_ROWS = [
+    {"unidade": "AGÊNCIA DA PREVIDÊNCIA SOCIAL", "especie": "BENEFÍCIO POR INCAPACIDADE"},
+    {"unidade": "AVALIAÇÃO SÃO PAULO", "especie": "PENSÃO POR MORTE"},
+]
+
+
+@pytest.mark.parametrize("encoding", ["latin-1", "cp1252", "utf-8"])
+def test_read_resource_keeps_accents_in_csv(tmp_path, make_csv_bytes, encoding):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(ACCENTED_ROWS, encoding=encoding))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert df.loc[0, "unidade"] == "AGÊNCIA DA PREVIDÊNCIA SOCIAL"
+    assert df.loc[0, "especie"] == "BENEFÍCIO POR INCAPACIDADE"
+    assert df.loc[1, "unidade"] == "AVALIAÇÃO SÃO PAULO"
+
+
+def test_read_resource_keeps_accents_past_the_detection_sample(tmp_path, make_csv_bytes):
+    # perfil_unidades opens with plain ASCII unit names, so the first accented
+    # byte can sit well past the 64 KB looked at to sniff the delimiter.
+    # Detecting on that sample alone answered "ascii" and the read blew up.
+    filler = [{"unidade": f"UNIDADE {index}", "especie": "APOSENTADORIA"} for index in range(5000)]
+    path = _write(tmp_path, "res.csv", make_csv_bytes(filler + ACCENTED_ROWS))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert len(df) == 5002
+    assert df.iloc[-1]["unidade"] == "AVALIAÇÃO SÃO PAULO"
+
+
+def test_read_resource_strips_the_utf8_bom_from_the_first_column(tmp_path, make_csv_bytes):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(ACCENTED_ROWS, encoding="utf-8-sig"))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "unidade", "especie"]
+
+
+def test_read_resource_keeps_accents_in_a_csv_inside_a_zip(tmp_path, make_csv_zip_bytes):
+    path = _write(tmp_path, "res.zip", make_csv_zip_bytes(ACCENTED_ROWS, member_name="dados.csv"))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert df.loc[0, "especie"] == "BENEFÍCIO POR INCAPACIDADE"

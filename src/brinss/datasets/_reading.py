@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import codecs
 import csv
 import io
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
 
-import charset_normalizer
 import pandas as pd
 
 from . import _log
@@ -16,6 +16,8 @@ from .exceptions import ColumnNotFoundError, UnsupportedArchiveError
 
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2/Compound File signature (legacy .xls)
 _SAMPLE_SIZE = 65536
+_DECODE_CHUNK_SIZE = 1 << 20
+_UTF16_BOMS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
 _HEADER_SCAN_ROWS = 10
 _TABULAR_SUFFIXES = (".csv", ".xlsx", ".xlsm", ".xls")
 
@@ -197,9 +199,10 @@ def _read_excel(
 
 
 def _read_csv_bytes(raw: bytes, *, columns: list[str] | None, dtype: ColumnDtype) -> pd.DataFrame:
-    sample = raw[:_SAMPLE_SIZE]
-    encoding = _detect_encoding(sample)
-    delimiter = _detect_delimiter(sample.decode(encoding, errors="replace"))
+    encoding = _detect_encoding(raw)
+    # The cut may land inside a character; errors="replace" is harmless here,
+    # since the sniffer only ever looks at the delimiter candidates.
+    delimiter = _detect_delimiter(raw[:_SAMPLE_SIZE].decode(encoding, errors="replace"))
 
     read_kwargs = _pandas_read_kwargs(columns, dtype)
     try:
@@ -210,11 +213,51 @@ def _read_csv_bytes(raw: bytes, *, columns: list[str] | None, dtype: ColumnDtype
         raise
 
 
-def _detect_encoding(sample: bytes) -> str:
-    match = charset_normalizer.from_bytes(sample).best()
-    if match is not None and match.encoding:
-        return match.encoding
-    return "latin-1"
+def _detect_encoding(raw: bytes) -> str:
+    """Return the encoding the whole payload decodes cleanly with.
+
+    The portal publishes its CSVs as UTF-8 or as Windows-1252 -- the default
+    of the tools that export them -- and as nothing else, so trying to decode
+    the bytes in that order of preference answers the question exactly.
+
+    Statistical detection over a leading 64 KB sample used to do this, and it
+    was wrong in both directions. On a file whose accents only start thousands
+    of rows in -- ``perfil_unidades`` opens with plain ASCII unit names -- it
+    answers "ascii", and the read then dies with a ``UnicodeDecodeError`` on
+    the first accented byte past the sample. On short Portuguese text it
+    answers "cp1250", where 0xCA is not "E-circumflex" but "E-ogonek": no
+    error is raised at all and every accent comes out silently mangled.
+    Looking at the bytes that will actually be read rules out both.
+
+    ``utf-8-sig`` is returned rather than ``utf-8`` so that a leading BOM is
+    stripped instead of ending up glued to the first column's name.
+    """
+    if raw.startswith(_UTF16_BOMS):
+        return "utf-16"  # not published today, but a BOM says so unambiguously
+    if _decodes_fully(raw, "utf-8"):
+        return "utf-8-sig"
+    if _decodes_fully(raw, "cp1252"):
+        return "cp1252"
+    return "latin-1"  # maps every one of the 256 bytes, so it cannot fail
+
+
+def _decodes_fully(raw: bytes, encoding: str) -> bool:
+    """Whether ``raw`` decodes end to end under ``encoding``.
+
+    A plain ``raw.decode()`` would materialize a second copy of a file that
+    can run to tens of megabytes just to answer yes or no. The incremental
+    decoder drops each chunk as it goes and carries over the multi-byte
+    sequences straddling a chunk boundary, so a truncated one at the very end
+    still fails the way it should.
+    """
+    decoder = codecs.getincrementaldecoder(encoding)()
+    try:
+        for start in range(0, len(raw), _DECODE_CHUNK_SIZE):
+            decoder.decode(raw[start : start + _DECODE_CHUNK_SIZE])
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 def _detect_delimiter(sample_text: str) -> str:
