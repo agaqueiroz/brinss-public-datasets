@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import csv
 import io
+import time
 import zipfile
 from pathlib import Path
 
 import charset_normalizer
 import pandas as pd
 
+from . import _log
 from ._catalog import ResourceEntry
 from .enums import XlsxEngine
 from .exceptions import ColumnNotFoundError, UnsupportedArchiveError
@@ -31,6 +33,10 @@ def read_resource(
     cannot open. The downloaded bytes are inspected instead of trusting that
     metadata.
     """
+    logger = _log.get_logger()
+    logger.info("Reading '%s' (%s) into a DataFrame...", path.name, _log.format_bytes(path.stat().st_size))
+    started_at = time.perf_counter()
+
     try:
         if zipfile.is_zipfile(path):
             frame = _read_zip(path, columns=columns, engine=engine)
@@ -44,6 +50,14 @@ def read_resource(
         ) from exc
 
     frame.insert(0, "periodo_referencia", entry.period)
+
+    logger.info(
+        "DataFrame loaded: %s rows x %s columns from '%s' in %s.",
+        f"{len(frame):,}",
+        len(frame.columns),
+        path.name,
+        _log.format_seconds(time.perf_counter() - started_at),
+    )
     return frame
 
 
