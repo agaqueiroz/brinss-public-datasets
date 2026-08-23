@@ -7,7 +7,7 @@ import pytest
 
 from brinss.datasets._catalog import ResourceEntry
 from brinss.datasets._reading import read_resource
-from brinss.datasets.enums import XlsxEngine
+from brinss.datasets.enums import ColumnDtype, XlsxEngine
 from brinss.datasets.exceptions import ColumnNotFoundError, UnsupportedArchiveError
 
 ROWS = [
@@ -39,7 +39,7 @@ def test_read_resource_raw_csv(tmp_path, make_csv_bytes):
 
     assert list(df["periodo_referencia"]) == [pd.Period("2024-06", freq="M")] * 2
     assert df.loc[0, "beneficio"] == "aposentadoria"
-    assert df.loc[0, "valor"] == 1500
+    assert df.loc[0, "valor"] == "1500"
 
 
 def test_read_resource_csv_inside_zip_wrapper(tmp_path, make_csv_zip_bytes):
@@ -219,3 +219,78 @@ def test_read_resource_legacy_xls_skips_banner_row(tmp_path, make_xls_bytes):
 
     assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
     assert len(df) == 2
+
+
+# Codes published by the INSS (CID, CBO, CNAE, IBGE municipality) are text with
+# leading zeros in the source files; type inference silently turns "01234" into
+# 1234 and breaks every join against a reference table. Hence dtype="str" being
+# the default rather than an opt-in.
+CODE_ROWS = [
+    {"codigo": "01234", "valor": 1500},
+    {"codigo": "00987", "valor": 900},
+]
+
+
+def test_read_resource_defaults_to_string_columns(tmp_path, make_csv_bytes):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(CODE_ROWS))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df["codigo"]) == ["01234", "00987"]
+    assert list(df["valor"]) == ["1500", "900"]
+
+
+def test_read_resource_infer_restores_pandas_type_inference(tmp_path, make_csv_bytes):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(CODE_ROWS))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL, dtype=ColumnDtype.INFER)
+
+    assert list(df["codigo"]) == [1234, 987]  # the leading zeros are gone
+    assert df["valor"].dtype == "int64"
+
+
+def test_read_resource_dtype_accepts_a_plain_string(tmp_path, make_csv_bytes):
+    # ColumnDtype is a str-mixin enum, so callers may skip the import entirely.
+    path = _write(tmp_path, "res.csv", make_csv_bytes(CODE_ROWS))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL, dtype="infer")
+
+    assert list(df["codigo"]) == [1234, 987]
+
+
+def test_read_resource_xlsx_honours_dtype(tmp_path, make_xlsx_bytes):
+    # Same contract on the _read_excel branch, banner row included.
+    data = make_xlsx_bytes(CODE_ROWS, banner=BANNER)
+    path = _write(tmp_path, "res.xlsx", data)
+
+    as_text = read_resource(path, _entry(format_="XLSX"), columns=None, engine=XlsxEngine.OPENPYXL)
+    inferred = read_resource(
+        path, _entry(format_="XLSX"), columns=None, engine=XlsxEngine.OPENPYXL, dtype=ColumnDtype.INFER
+    )
+
+    assert list(as_text["codigo"]) == ["01234", "00987"]
+    assert list(inferred["codigo"]) == [1234, 987]
+
+
+def test_read_resource_string_dtype_keeps_empty_cells_as_na(tmp_path, make_csv_bytes):
+    # dtype=str must not turn a missing value into the literal "nan": .isna()
+    # has to keep working for callers filtering incomplete rows.
+    path = _write(tmp_path, "res.csv", make_csv_bytes([{"codigo": "01234", "valor": ""}]))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert df.loc[0, "codigo"] == "01234"
+    assert df["valor"].isna().all()
+
+
+def test_read_resource_periodo_referencia_stays_a_period_in_string_mode(tmp_path, make_csv_bytes):
+    # The column is the library's own metadata, not a column of the file, so it
+    # keeps its type in both modes and stays usable for period filtering.
+    path = _write(tmp_path, "res.csv", make_csv_bytes(CODE_ROWS))
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df["periodo_referencia"]) == [pd.Period("2024-06", freq="M")] * 2
+
+
+def test_read_resource_dtype_combines_with_columns(tmp_path, make_csv_bytes):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(CODE_ROWS))
+    df = read_resource(path, _entry(), columns=["codigo"], engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "codigo"]
+    assert list(df["codigo"]) == ["01234", "00987"]

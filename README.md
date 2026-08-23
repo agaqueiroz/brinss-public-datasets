@@ -21,6 +21,10 @@ df = load_beneficios_concedidos(periodo=("2024-01", "2024-06"))    # intervalo d
 df = load_beneficios_concedidos(periodo="all")                     # todo o histórico disponível
 ```
 
+As colunas vêm como texto por padrão, para não perder os zeros à esquerda dos
+códigos do INSS. Para deixar o pandas converter os tipos automaticamente, passe
+`dtype="infer"` — veja [Tipos das colunas](#tipos-das-colunas).
+
 Datasets disponíveis (`brinss.datasets.list_datasets()`):
 
 | Função | Descrição |
@@ -44,6 +48,7 @@ df = load_dataset(
     periodo="2024-06",
     as_dict=False,          # True: dict[str, DataFrame] por período, em vez de concatenar
     columns=None,           # lista de colunas para carregar só um subconjunto
+    dtype="str",            # "str": tudo como texto (padrão) | "infer": pandas infere os tipos
     force_download=False,   # ignora o cache local e baixa de novo
     force_refresh=False,    # ignora o cache (24h) do catálogo de períodos disponíveis
     cache_dir=None,         # sobrescreve o diretório de cache para esta chamada
@@ -119,6 +124,42 @@ descrição (`APS`, `APS`, `Espécie`, `Espécie`, ... em `beneficios_concedidos
 `CBO`, `CBO`, ... na CAT). Esses casos saem com o sufixo padrão do pandas:
 `APS` e `APS.1`.
 
+### Tipos das colunas
+
+Por padrão **todas as colunas são carregadas como texto** (`dtype="str"`). Não é
+um detalhe de conveniência: os arquivos publicados são texto, e a inferência de
+tipos do pandas destrói dados reais desses datasets.
+
+- **Zeros à esquerda somem.** CID, CBO, CNAE e código IBGE de município vêm como
+  `"01234"` na origem e viram `1234` na inferência — o join com qualquer tabela
+  de referência passa a não casar.
+- **O tipo muda de mês para mês.** Um mês em que a coluna vem toda preenchida é
+  inferido como `int64`; outro com células vazias vira `float64`. Ao pedir um
+  intervalo de meses, o DataFrame concatenado sai com o tipo dependendo de quais
+  meses foram pedidos.
+
+Para deixar o pandas converter os tipos, como faria um `read_csv` cru:
+
+```python
+df = load_beneficios_concedidos(periodo="2024-06", dtype="infer")
+```
+
+O parâmetro também aceita o enum exportado, se preferir explicitar:
+
+```python
+from brinss.datasets import ColumnDtype
+
+df = load_beneficios_concedidos(periodo="2024-06", dtype=ColumnDtype.INFER)
+```
+
+Duas observações sobre o modo texto:
+
+- Células vazias continuam saindo como `NaN`, e não como `""` — `.isna()` segue
+  funcionando normalmente para filtrar linhas incompletas.
+- `periodo_referencia` **não** é afetada: é metadado inserido pela biblioteca, e
+  continua como `pandas.Period` nos dois modos, para permitir filtros por
+  período direto no DataFrame.
+
 ### Benefícios mantidos: três datasets, não um
 
 O portal publica **três recursos por mês** para benefícios mantidos — ativos,
@@ -142,6 +183,9 @@ em contraste, é leve (~5 MB/mês). `periodo="all"` ou intervalos grandes nas
 famílias pesadas podem exigir bastante RAM e espaço em disco. Nenhum limite é aplicado
 automaticamente nesta versão — prefira pedir um `periodo` específico e, se
 precisar, usar `columns=[...]` para reduzir o volume carregado em memória.
+Nessas famílias pesadas vale lembrar que o padrão `dtype="str"` costuma ocupar
+mais RAM que colunas numéricas; se os códigos com zero à esquerda não importarem
+para a sua análise, `dtype="infer"` reduz o consumo.
 
 ### Mensagens de progresso
 

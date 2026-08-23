@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import _log
 from ._catalog import ResourceEntry
-from .enums import XlsxEngine
+from .enums import ColumnDtype, XlsxEngine
 from .exceptions import ColumnNotFoundError, UnsupportedArchiveError
 
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2/Compound File signature (legacy .xls)
@@ -26,6 +26,7 @@ def read_resource(
     *,
     columns: list[str] | None,
     engine: XlsxEngine,
+    dtype: ColumnDtype | str = ColumnDtype.STRING,
 ) -> pd.DataFrame:
     """Read one downloaded resource into a DataFrame, sniffing its real content.
 
@@ -39,18 +40,24 @@ def read_resource(
     ones open with a one-cell banner row above the real column names, so the
     header row is located by looking at the sheet rather than assumed to be
     the first one. See ``_excel_header_row``.
+
+    ``dtype`` picks between reading every column as ``str`` (the default,
+    faithful to the published text) and letting pandas infer types. Either
+    way the ``periodo_referencia`` column added below stays a ``pd.Period``:
+    it is the library's own metadata, not a column of the file.
     """
+    dtype = ColumnDtype(dtype)  # a plain "str"/"infer" is == but not `is` a member
     logger = _log.get_logger()
     logger.info("Reading '%s' (%s) into a DataFrame...", path.name, _log.format_bytes(path.stat().st_size))
     started_at = time.perf_counter()
 
     try:
         if zipfile.is_zipfile(path):
-            frame = _read_zip(path, columns=columns, engine=engine)
+            frame = _read_zip(path, columns=columns, engine=engine, dtype=dtype)
         elif _looks_like_legacy_xls(path):
-            frame = _read_excel(path, columns=columns, engine_name="xlrd")
+            frame = _read_excel(path, columns=columns, engine_name="xlrd", dtype=dtype)
         else:
-            frame = _read_csv_bytes(path.read_bytes(), columns=columns)
+            frame = _read_csv_bytes(path.read_bytes(), columns=columns, dtype=dtype)
     except ColumnNotFoundError as exc:
         raise ColumnNotFoundError(
             f"coluna solicitada nao encontrada no recurso '{entry.resource_name}' ({entry.period}): {exc}"
@@ -73,13 +80,13 @@ def _looks_like_legacy_xls(path: Path) -> bool:
         return handle.read(len(_XLS_MAGIC)) == _XLS_MAGIC
 
 
-def _read_zip(path: Path, *, columns: list[str] | None, engine: XlsxEngine) -> pd.DataFrame:
+def _read_zip(path: Path, *, columns: list[str] | None, engine: XlsxEngine, dtype: ColumnDtype) -> pd.DataFrame:
     with zipfile.ZipFile(path) as archive:
         names = [name for name in archive.namelist() if not name.endswith("/")]
 
         if any(name == "[Content_Types].xml" or name.startswith("xl/") for name in names):
             # The zip itself IS a genuine XLSX/OOXML spreadsheet; let openpyxl open it directly.
-            return _read_excel(path, columns=columns, engine_name=engine.value)
+            return _read_excel(path, columns=columns, engine_name=engine.value, dtype=dtype)
 
         data_members = [name for name in names if not name.startswith("__MACOSX")]
         member = _pick_data_member(data_members, archive_name=path.name)
@@ -87,10 +94,10 @@ def _read_zip(path: Path, *, columns: list[str] | None, engine: XlsxEngine) -> p
 
     suffix = Path(member).suffix.lower()
     if suffix in (".xlsx", ".xlsm"):
-        return _read_excel(io.BytesIO(raw), columns=columns, engine_name=engine.value)
+        return _read_excel(io.BytesIO(raw), columns=columns, engine_name=engine.value, dtype=dtype)
     if suffix == ".xls":
-        return _read_excel(io.BytesIO(raw), columns=columns, engine_name="xlrd")
-    return _read_csv_bytes(raw, columns=columns)
+        return _read_excel(io.BytesIO(raw), columns=columns, engine_name="xlrd", dtype=dtype)
+    return _read_csv_bytes(raw, columns=columns, dtype=dtype)
 
 
 def _member_stem(name: str) -> str:
@@ -139,6 +146,20 @@ def _pick_data_member(names: list[str], *, archive_name: str) -> str:
     )
 
 
+def _pandas_read_kwargs(columns: list[str] | None, dtype: ColumnDtype) -> dict:
+    """Build the kwargs shared by both ``pd.read_*`` calls.
+
+    ``dtype=str`` still leaves empty cells as ``NaN`` rather than ``""``, so
+    ``.isna()`` keeps working the way pandas users expect.
+    """
+    kwargs: dict = {}
+    if columns is not None:
+        kwargs["usecols"] = columns
+    if dtype is ColumnDtype.STRING:
+        kwargs["dtype"] = str
+    return kwargs
+
+
 def _excel_header_row(source: Path | io.BytesIO, *, engine_name: str) -> int:
     """Return the index of the row holding the real column names.
 
@@ -162,9 +183,11 @@ def _excel_header_row(source: Path | io.BytesIO, *, engine_name: str) -> int:
     return 0
 
 
-def _read_excel(source: Path | io.BytesIO, *, columns: list[str] | None, engine_name: str) -> pd.DataFrame:
+def _read_excel(
+    source: Path | io.BytesIO, *, columns: list[str] | None, engine_name: str, dtype: ColumnDtype
+) -> pd.DataFrame:
     header = _excel_header_row(source, engine_name=engine_name)
-    read_kwargs = {"usecols": columns} if columns is not None else {}
+    read_kwargs = _pandas_read_kwargs(columns, dtype)
     try:
         return pd.read_excel(source, engine=engine_name, header=header, **read_kwargs)
     except ValueError as exc:
@@ -173,12 +196,12 @@ def _read_excel(source: Path | io.BytesIO, *, columns: list[str] | None, engine_
         raise
 
 
-def _read_csv_bytes(raw: bytes, *, columns: list[str] | None) -> pd.DataFrame:
+def _read_csv_bytes(raw: bytes, *, columns: list[str] | None, dtype: ColumnDtype) -> pd.DataFrame:
     sample = raw[:_SAMPLE_SIZE]
     encoding = _detect_encoding(sample)
     delimiter = _detect_delimiter(sample.decode(encoding, errors="replace"))
 
-    read_kwargs = {"usecols": columns} if columns is not None else {}
+    read_kwargs = _pandas_read_kwargs(columns, dtype)
     try:
         return pd.read_csv(io.BytesIO(raw), sep=delimiter, encoding=encoding, **read_kwargs)
     except ValueError as exc:
