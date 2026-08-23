@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+_MANTIDOS_SLUG = "beneficios-mantidos-plano-de-dados-abertos-jun-2023-a-jun-2025"
+
 
 @dataclass(frozen=True)
 class DatasetFamily:
@@ -14,11 +16,22 @@ class DatasetFamily:
     instead of monthly XLSX and are intentionally out of scope for now; the
     tuple shape is kept so they can be appended later without changing
     ``_catalog.py``'s merge logic.
+
+    ``resource_filter`` narrows a package down when it holds more than one
+    dataset side by side, which is how "benefícios mantidos" is published:
+    ativos, cessados and suspensos, three resources for every month.
     """
 
     key: str
     title: str
     slugs: tuple[str, ...]
+    resource_filter: str | None = None
+
+    def matches_resource(self, resource_name: str) -> bool:
+        """Whether a CKAN resource of one of ``slugs`` belongs to this family."""
+        if self.resource_filter is None:
+            return True
+        return self.resource_filter in resource_name.casefold()
 
 
 FAMILIES: dict[str, DatasetFamily] = {
@@ -32,10 +45,23 @@ FAMILIES: dict[str, DatasetFamily] = {
         title="Benefícios emitidos",
         slugs=("beneficios-emitidos-plano-de-dados-abertos-jun-2023-a-jun-2025",),
     ),
-    "beneficios_mantidos": DatasetFamily(
-        key="beneficios_mantidos",
-        title="Benefícios mantidos",
-        slugs=("beneficios-mantidos-plano-de-dados-abertos-jun-2023-a-jun-2025",),
+    "beneficios_mantidos_ativos": DatasetFamily(
+        key="beneficios_mantidos_ativos",
+        title="Benefícios mantidos ativos",
+        slugs=(_MANTIDOS_SLUG,),
+        resource_filter="ativos",
+    ),
+    "beneficios_mantidos_cessados": DatasetFamily(
+        key="beneficios_mantidos_cessados",
+        title="Benefícios mantidos cessados",
+        slugs=(_MANTIDOS_SLUG,),
+        resource_filter="cessados",
+    ),
+    "beneficios_mantidos_suspensos": DatasetFamily(
+        key="beneficios_mantidos_suspensos",
+        title="Benefícios mantidos suspensos",
+        slugs=(_MANTIDOS_SLUG,),
+        resource_filter="suspensos",
     ),
     "beneficios_indeferidos": DatasetFamily(
         key="beneficios_indeferidos",

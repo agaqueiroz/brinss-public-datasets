@@ -27,7 +27,9 @@ Datasets disponíveis (`brinss.datasets.list_datasets()`):
 | --- | --- |
 | `load_beneficios_concedidos` | Benefícios concedidos |
 | `load_beneficios_emitidos` | Benefícios emitidos |
-| `load_beneficios_mantidos` | Benefícios mantidos |
+| `load_beneficios_mantidos_ativos` | Benefícios mantidos ativos |
+| `load_beneficios_mantidos_cessados` | Benefícios mantidos cessados |
+| `load_beneficios_mantidos_suspensos` | Benefícios mantidos suspensos |
 | `load_beneficios_indeferidos` | Benefícios indeferidos |
 | `load_comunicacoes_acidente_trabalho` | Comunicações de Acidente de Trabalho (CAT) |
 | `load_perfil_unidades` | Perfil das unidades do INSS |
@@ -109,12 +111,27 @@ descrição (`APS`, `APS`, `Espécie`, `Espécie`, ... em `beneficios_concedidos
 `CBO`, `CBO`, ... na CAT). Esses casos saem com o sufixo padrão do pandas:
 `APS` e `APS.1`.
 
+### Benefícios mantidos: três datasets, não um
+
+O portal publica **três recursos por mês** para benefícios mantidos — ativos,
+cessados e suspensos — dentro do mesmo pacote, e eles **não compartilham as
+mesmas colunas**: cessados não traz `Clientela` e repete `Sexo.`, e ativos usa
+`Motivo Cessação/Suspensão` onde os outros dois usam `Motivo
+Cessação/Suspensão Novo`. Por isso são três funções separadas, e não uma só
+com tudo empilhado.
+
+O mês de referência é lido do nome do recurso, mas quando dois recursos
+reivindicam o mesmo mês o nome do arquivo na URL desempata — é o que recupera
+suspensos de maio/2025, que o portal publicou rotulado como "abril 2025".
+
 ### Arquivos grandes
 
-Alguns meses de `beneficios_emitidos` e `beneficios_mantidos` descompactam
-para vários gigabytes (um único mês de `beneficios_emitidos` chega a ~10 GB
-descompactado). `periodo="all"` ou intervalos grandes nessas famílias podem
-exigir bastante RAM e espaço em disco. Nenhum limite é aplicado
+Alguns meses descompactam para vários gigabytes. Tamanhos por mês, medidos em
+maio/2026: `beneficios_mantidos_ativos` ~891 MB, `beneficios_mantidos_cessados`
+~786 MB e `beneficios_emitidos` ~763 MB compactados — um único mês de
+`beneficios_emitidos` chega a ~10 GB descompactado. `beneficios_mantidos_suspensos`,
+em contraste, é leve (~5 MB/mês). `periodo="all"` ou intervalos grandes nas
+famílias pesadas podem exigir bastante RAM e espaço em disco. Nenhum limite é aplicado
 automaticamente nesta versão — prefira pedir um `periodo` específico e, se
 precisar, usar `columns=[...]` para reduzir o volume carregado em memória.
 

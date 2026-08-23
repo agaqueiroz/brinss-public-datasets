@@ -4,14 +4,19 @@ import json
 import os
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
 
 from . import _ckan
 from ._families import DatasetFamily
-from ._period import PeriodoLike, normalize_periodo, parse_periodo_from_name
+from ._period import (
+    PeriodoLike,
+    normalize_periodo,
+    parse_periodo_from_name,
+    parse_periodo_from_url,
+)
 from .exceptions import CkanUnavailableError, PeriodUnavailableError
 
 DEFAULT_CATALOG_TTL_SECONDS = 86400
@@ -124,6 +129,9 @@ def build_catalog(
         package = _get_package_show(slug, cache_dir=cache_dir, force_refresh=force_refresh, ttl_seconds=resolved_ttl)
         for resource in package.get("resources", []):
             name = resource.get("name", "")
+            if not family.matches_resource(name):
+                continue  # another dataset sharing this package (see DatasetFamily.resource_filter)
+
             period = parse_periodo_from_name(name)
             if period is None:
                 warnings.warn(
@@ -133,10 +141,8 @@ def build_catalog(
                 continue
 
             if period in entries:
-                warnings.warn(
-                    f"periodo {period} presente em mais de um pacote da familia '{family.key}' "
-                    f"('{entries[period].package_slug}' e '{slug}'); mantendo o de '{slug}'.",
-                    stacklevel=2,
+                period = _resolve_period_collision(
+                    period, entries=entries, family=family, slug=slug, name=name, url=resource["url"]
                 )
 
             # Later slugs in family.slugs win on overlap (current/rolling package is canonical).
@@ -151,6 +157,44 @@ def build_catalog(
 
     sorted_entries = tuple(entries[period] for period in sorted(entries))
     return DatasetCatalog(family=family, entries=sorted_entries)
+
+
+def _resolve_period_collision(
+    period: pd.Period,
+    *,
+    entries: dict[pd.Period, ResourceEntry],
+    family: DatasetFamily,
+    slug: str,
+    name: str,
+    url: str,
+) -> pd.Period:
+    """Settle two resources claiming the same period, and return where the new one goes.
+
+    The portal sometimes mislabels a resource while the file it points to is
+    named correctly: there are two "Beneficios Mantidos Suspensos abril 2025",
+    and the second one really is ``MANSUSPENSOS.202505``. So the file name is
+    asked for a second opinion, on both sides -- the resources come in
+    whatever order the package lists them, so either the newcomer or the one
+    already seated can be the mislabeled one. The seated one is moved out of
+    the way in that case (``entries`` is mutated).
+    """
+    incumbent = entries[period]
+    challenger_period = parse_periodo_from_url(url)
+    incumbent_period = parse_periodo_from_url(incumbent.url)
+
+    if challenger_period is not None and challenger_period != period:
+        return challenger_period
+    if incumbent_period is not None and incumbent_period != period:
+        entries[incumbent_period] = replace(entries.pop(period), period=incumbent_period)
+        return period
+
+    warnings.warn(
+        f"periodo {period} reivindicado por mais de um recurso da familia '{family.key}' "
+        f"('{incumbent.resource_name}' de '{incumbent.package_slug}' e '{name}' de '{slug}'), "
+        f"e as URLs nao desempatam; mantendo '{name}'.",
+        stacklevel=3,
+    )
+    return period
 
 
 def resolve_periods(catalog: DatasetCatalog, periodo: PeriodoLike) -> list[pd.Period]:

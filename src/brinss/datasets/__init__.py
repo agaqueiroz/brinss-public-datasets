@@ -47,7 +47,9 @@ __all__ = [
     "load_beneficios_concedidos",
     "load_beneficios_emitidos",
     "load_beneficios_indeferidos",
-    "load_beneficios_mantidos",
+    "load_beneficios_mantidos_ativos",
+    "load_beneficios_mantidos_cessados",
+    "load_beneficios_mantidos_suspensos",
     "load_comunicacoes_acidente_trabalho",
     "load_dataset",
     "load_perfil_unidades",
@@ -67,8 +69,20 @@ def load_beneficios_emitidos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFr
     return load_dataset("beneficios_emitidos", periodo, **kwargs)
 
 
-def load_beneficios_mantidos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
-    return load_dataset("beneficios_mantidos", periodo, **kwargs)
+def load_beneficios_mantidos_ativos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("beneficios_mantidos_ativos", periodo, **kwargs)
+
+
+def load_beneficios_mantidos_cessados(
+    periodo: PeriodoLike = None, **kwargs
+) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("beneficios_mantidos_cessados", periodo, **kwargs)
+
+
+def load_beneficios_mantidos_suspensos(
+    periodo: PeriodoLike = None, **kwargs
+) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("beneficios_mantidos_suspensos", periodo, **kwargs)
 
 
 def load_beneficios_indeferidos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
