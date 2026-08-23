@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import urllib.parse
 from typing import Literal, Union
 
 import pandas as pd
@@ -39,6 +40,7 @@ _MONTHS_PT: dict[str, int] = {
 
 _MONTH_ALTERNATION = "|".join(sorted(_MONTHS_PT, key=len, reverse=True))
 _MONTH_YEAR_RE = re.compile(rf"(?P<month>{_MONTH_ALTERNATION})\D{{0,3}}(?P<year>(?:19|20)\d{{2}})")
+_YYYYMM_RE = re.compile(r"(?<!\d)(?P<year>20\d{2})(?P<month>0[1-9]|1[0-2])(?!\d)")
 
 
 def _strip_accents(text: str) -> str:
@@ -60,6 +62,22 @@ def parse_periodo_from_name(name: str) -> pd.Period | None:
     month = _MONTHS_PT[match.group("month")]
     year = int(match.group("year"))
     return pd.Period(year=year, month=month, freq="M")
+
+
+def parse_periodo_from_url(url: str) -> pd.Period | None:
+    """Extract a monthly ``pd.Period`` from the file name a resource points to.
+
+    Most of the portal's file names carry an unambiguous ``YYYYMM`` stamp
+    (``D.SDA.PDA.004.MANSUSPENSOS.202505.CSV.ZIP``), which is a second opinion
+    on the period when the resource's own name is not to be trusted. Returns
+    ``None`` when there is no such stamp -- the "concedidos" and "indeferidos"
+    files are named after the month in Portuguese instead.
+    """
+    filename = urllib.parse.unquote(url).rstrip("/").rsplit("/", 1)[-1]
+    match = _YYYYMM_RE.search(filename)
+    if match is None:
+        return None
+    return pd.Period(year=int(match.group("year")), month=int(match.group("month")), freq="M")
 
 
 def _parse_single(value: str) -> pd.Period:
