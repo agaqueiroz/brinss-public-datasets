@@ -75,6 +75,27 @@ calculado e guardado localmente, e passa a ser conferido nas chamadas
 seguintes (detectando automaticamente se o governo trocar o conteúdo de um
 arquivo sem trocar o nome).
 
+### Formato dos arquivos
+
+O campo `format` que a CKAN retorna para cada recurso não é confiável: já foi
+visto marcado como `CSV` para um arquivo que na prática é um **ZIP contendo
+um único CSV** (`;` como delimitador, encoding Latin-1/cp1252), e marcado
+como `XLS`/`XLSX` para arquivos que às vezes são XLSX genuíno, às vezes
+`.xltx`, etc. Por isso a biblioteca **inspeciona o conteúdo real do arquivo
+baixado** (em vez de confiar no `format`) para decidir como ler: ZIP com
+planilha OOXML dentro é lido como Excel; ZIP com um único CSV dentro é
+descompactado e o CSV é lido com detecção automática de delimitador/encoding;
+Excel binário legado (`.xls` no formato antigo OLE2) é lido via `xlrd`.
+
+### Arquivos grandes
+
+Alguns meses de `beneficios_emitidos` e `beneficios_mantidos` descompactam
+para vários gigabytes (um único mês de `beneficios_emitidos` chega a ~10 GB
+descompactado). `periodo="all"` ou intervalos grandes nessas famílias podem
+exigir bastante RAM e espaço em disco. Nenhum limite é aplicado
+automaticamente nesta versão — prefira pedir um `periodo` específico e, se
+precisar, usar `columns=[...]` para reduzir o volume carregado em memória.
+
 ## To-do
 
 - [x] Adicionar tópicos ao repositório no GitHub, para facilitar descoberta.
