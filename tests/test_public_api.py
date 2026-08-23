@@ -39,5 +39,20 @@ def test_load_wrappers_delegate_to_load_dataset_with_the_right_family_key(monkey
     assert set(calls) == EXPECTED_FAMILY_KEYS
 
 
+def test_load_wrappers_forward_dtype_to_load_dataset(monkeypatch):
+    # The wrappers take **kwargs, so nothing in them names dtype -- this pins
+    # that it still reaches load_dataset.
+    captured = {}
+
+    def fake_load_dataset(name, periodo=None, **kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(ds, "load_dataset", fake_load_dataset)
+    ds.load_beneficios_concedidos(dtype=ds.ColumnDtype.INFER)
+
+    assert captured["dtype"] is ds.ColumnDtype.INFER
+
+
 def test_get_cache_dir_returns_a_path(tmp_path):
     assert ds.get_cache_dir(tmp_path) == tmp_path
