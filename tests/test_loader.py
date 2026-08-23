@@ -79,6 +79,32 @@ def test_load_dataset_range_concatenates_and_as_dict(cache_dir, make_xlsx_bytes)
 
 
 @responses.activate
+def test_load_dataset_handles_csv_labeled_resource_that_is_actually_a_zip(cache_dir, make_csv_zip_bytes):
+    # Mirrors the real portal: beneficios_emitidos/mantidos resources are labeled
+    # "CSV" in CKAN metadata but the actual download is a ZIP wrapping one CSV.
+    resources = [
+        {
+            "id": "res-06",
+            "name": "Benefícios concedidos junho 2024",
+            "format": "CSV",
+            "url": "https://fixtures.test/concedidos/junho-2024.csv.zip",
+        }
+    ]
+    _mock_package_show(resources)
+    responses.add(
+        responses.GET,
+        resources[0]["url"],
+        body=make_csv_zip_bytes([{"beneficio": "aposentadoria", "valor": 1500}], member_name="dados.csv"),
+        status=200,
+    )
+
+    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir)
+
+    assert df.loc[0, "beneficio"] == "aposentadoria"
+    assert list(df["periodo_referencia"]) == [pd.Period("2024-06", freq="M")]
+
+
+@responses.activate
 def test_load_dataset_missing_column_raises(cache_dir, make_xlsx_bytes):
     resources = [
         _resource("Benefícios concedidos junho 2024", "res-06", "https://fixtures.test/concedidos/junho-2024.xlsx"),
