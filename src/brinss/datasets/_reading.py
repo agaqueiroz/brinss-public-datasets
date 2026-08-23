@@ -4,7 +4,7 @@ import csv
 import io
 import time
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import charset_normalizer
 import pandas as pd
@@ -17,6 +17,7 @@ from .exceptions import ColumnNotFoundError, UnsupportedArchiveError
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2/Compound File signature (legacy .xls)
 _SAMPLE_SIZE = 65536
 _HEADER_SCAN_ROWS = 10
+_TABULAR_SUFFIXES = (".csv", ".xlsx", ".xlsm", ".xls")
 
 
 def read_resource(
@@ -81,13 +82,7 @@ def _read_zip(path: Path, *, columns: list[str] | None, engine: XlsxEngine) -> p
             return _read_excel(path, columns=columns, engine_name=engine.value)
 
         data_members = [name for name in names if not name.startswith("__MACOSX")]
-        if len(data_members) != 1:
-            raise UnsupportedArchiveError(
-                f"zip '{path.name}' tem estrutura inesperada (esperava 1 arquivo de dados, "
-                f"encontrado {len(data_members)}): {data_members!r}"
-            )
-
-        member = data_members[0]
+        member = _pick_data_member(data_members, archive_name=path.name)
         raw = archive.read(member)
 
     suffix = Path(member).suffix.lower()
@@ -96,6 +91,52 @@ def _read_zip(path: Path, *, columns: list[str] | None, engine: XlsxEngine) -> p
     if suffix == ".xls":
         return _read_excel(io.BytesIO(raw), columns=columns, engine_name="xlrd")
     return _read_csv_bytes(raw, columns=columns)
+
+
+def _member_stem(name: str) -> str:
+    """The member's path with its extension removed (zip names always use "/")."""
+    return str(PurePosixPath(name).with_suffix(""))
+
+
+def _pick_data_member(names: list[str], *, archive_name: str) -> str:
+    """Pick the one member of a zip that holds the data to read.
+
+    A member count above one does not mean the archive is malformed: the
+    "comunicacoes_acidente_trabalho" resources ship the SAME dataset three
+    times over inside a single zip -- ``D.SDA.PDA.005.CAT.202605.csv``,
+    ``.json`` and ``.xml``. Members that differ only by extension are treated
+    as one dataset, and the tabular serialization is the one read (csv first,
+    then the Excel ones); the others are never decompressed, they just stay
+    inside the archive.
+
+    Genuinely different datasets in one zip (different stems) still raise,
+    since nothing there says which one the caller meant.
+    """
+    if len(names) == 1:
+        return names[0]
+
+    if len({_member_stem(name) for name in names}) == 1:
+        for suffix in _TABULAR_SUFFIXES:
+            for name in names:
+                if Path(name).suffix.lower() == suffix:
+                    _log.get_logger().info(
+                        "Zip '%s' holds one dataset in %s formats; reading '%s', ignoring: %s.",
+                        archive_name,
+                        len(names),
+                        name,
+                        ", ".join(other for other in names if other != name),
+                    )
+                    return name
+
+        raise UnsupportedArchiveError(
+            f"zip '{archive_name}' nao traz nenhum formato tabular "
+            f"({', '.join(_TABULAR_SUFFIXES)}) entre seus membros: {names!r}"
+        )
+
+    raise UnsupportedArchiveError(
+        f"zip '{archive_name}' tem estrutura inesperada (esperava 1 arquivo de dados, "
+        f"encontrado {len(names)}): {names!r}"
+    )
 
 
 def _excel_header_row(source: Path | io.BytesIO, *, engine_name: str) -> int:
