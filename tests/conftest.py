@@ -48,14 +48,20 @@ def load_fixture():
 
 @pytest.fixture
 def make_xlsx_bytes():
-    def _make(rows: list[dict]) -> bytes:
+    def _make(rows: list[dict], *, banner: str | None = None, headers: list[str] | None = None) -> bytes:
+        """Build an .xlsx. With ``banner``, prepend a one-cell title row above
+        the header, the way the real "beneficios" spreadsheets are published.
+        ``headers`` overrides the column names, to exercise duplicates.
+        """
         workbook = openpyxl.Workbook()
         sheet = workbook.active
+        if banner is not None:
+            sheet.append([banner])
         if rows:
-            headers = list(rows[0].keys())
-            sheet.append(headers)
+            keys = list(rows[0].keys())
+            sheet.append(headers if headers is not None else keys)
             for row in rows:
-                sheet.append([row[header] for header in headers])
+                sheet.append([row[key] for key in keys])
         buffer = io.BytesIO()
         workbook.save(buffer)
         return buffer.getvalue()
@@ -97,14 +103,18 @@ def make_csv_zip_bytes(make_csv_bytes):
 
 @pytest.fixture
 def make_xls_bytes():
-    def _make(rows: list[dict]) -> bytes:
+    def _make(rows: list[dict], *, banner: str | None = None) -> bytes:
         workbook = xlwt.Workbook()
         sheet = workbook.add_sheet("Sheet1")
+        offset = 0
+        if banner is not None:
+            sheet.write(0, 0, banner)
+            offset = 1
         if rows:
             headers = list(rows[0].keys())
             for col, header in enumerate(headers):
-                sheet.write(0, col, header)
-            for row_idx, row in enumerate(rows, start=1):
+                sheet.write(offset, col, header)
+            for row_idx, row in enumerate(rows, start=offset + 1):
                 for col, header in enumerate(headers):
                     sheet.write(row_idx, col, row[header])
         buffer = io.BytesIO()

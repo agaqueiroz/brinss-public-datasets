@@ -16,6 +16,7 @@ from .exceptions import ColumnNotFoundError, UnsupportedArchiveError
 
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2/Compound File signature (legacy .xls)
 _SAMPLE_SIZE = 65536
+_HEADER_SCAN_ROWS = 10
 
 
 def read_resource(
@@ -32,6 +33,11 @@ def read_resource(
     resources labeled "XLS"/"XLSX" are legacy OLE2 binaries that ``openpyxl``
     cannot open. The downloaded bytes are inspected instead of trusting that
     metadata.
+
+    The spreadsheets are not laid out predictably either: the "beneficios"
+    ones open with a one-cell banner row above the real column names, so the
+    header row is located by looking at the sheet rather than assumed to be
+    the first one. See ``_excel_header_row``.
     """
     logger = _log.get_logger()
     logger.info("Reading '%s' (%s) into a DataFrame...", path.name, _log.format_bytes(path.stat().st_size))
@@ -92,10 +98,34 @@ def _read_zip(path: Path, *, columns: list[str] | None, engine: XlsxEngine) -> p
     return _read_csv_bytes(raw, columns=columns)
 
 
+def _excel_header_row(source: Path | io.BytesIO, *, engine_name: str) -> int:
+    """Return the index of the row holding the real column names.
+
+    ``beneficios_concedidos`` and ``beneficios_indeferidos`` publish sheets
+    whose first row is a title banner filling a single cell -- everything
+    below it shifts by one, which is what turns the column names into
+    ``Unnamed: 1``, ``Unnamed: 2``, and so on. The banner's text is rewritten
+    every month ("CONCEDIDOS DADOS ABERTOS - MAIO DE 2026" one month,
+    "DADOS ABERTOS - BENEFICIOS CONCEDIDOS - ANO JULHO DE 2026" the next), so
+    it is recognized by its shape instead: the header is the first row that
+    fills more than one cell. Sheets that start with a proper header, like
+    ``perfil_unidades``, land on row 0 and read exactly as before.
+    """
+    preview = pd.read_excel(source, engine=engine_name, header=None, nrows=_HEADER_SCAN_ROWS)
+    if hasattr(source, "seek"):
+        source.seek(0)  # a BytesIO from _read_zip is left at EOF by the peek
+
+    for index in range(len(preview)):
+        if preview.iloc[index].notna().sum() > 1:
+            return index
+    return 0
+
+
 def _read_excel(source: Path | io.BytesIO, *, columns: list[str] | None, engine_name: str) -> pd.DataFrame:
+    header = _excel_header_row(source, engine_name=engine_name)
     read_kwargs = {"usecols": columns} if columns is not None else {}
     try:
-        return pd.read_excel(source, engine=engine_name, **read_kwargs)
+        return pd.read_excel(source, engine=engine_name, header=header, **read_kwargs)
     except ValueError as exc:
         if columns is not None:
             raise ColumnNotFoundError(str(exc)) from exc

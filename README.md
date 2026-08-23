@@ -87,6 +87,28 @@ planilha OOXML dentro é lido como Excel; ZIP com um único CSV dentro é
 descompactado e o CSV é lido com detecção automática de delimitador/encoding;
 Excel binário legado (`.xls` no formato antigo OLE2) é lido via `xlrd`.
 
+### Cabeçalho das planilhas
+
+As planilhas de `beneficios_concedidos` e `beneficios_indeferidos` abrem com
+uma **linha de título** que preenche uma única célula (ex: `DADOS ABERTOS -
+BENEFÍCIOS CONCEDIDOS - ANO JULHO DE 2026`), e os nomes reais das colunas só
+vêm na linha seguinte. Lidas ingenuamente, essas planilhas produzem colunas
+chamadas `Unnamed: 1`, `Unnamed: 2`, etc.
+
+O texto dessa linha muda de mês para mês, então a biblioteca a identifica pela
+forma, e não pelo conteúdo: o cabeçalho é a primeira linha que preenche mais de
+uma célula. Planilhas que já começam com um cabeçalho de verdade, como as de
+`perfil_unidades`, não são afetadas.
+
+Como o cabeçalho passa a ser o correto, `columns=[...]` funciona com os nomes
+reais dessas famílias (`"APS"`, `"Competência concessão"`, ...) — antes não
+havia nome válido para pedir.
+
+Algumas famílias repetem nomes de coluna na origem, em pares de código e
+descrição (`APS`, `APS`, `Espécie`, `Espécie`, ... em `beneficios_concedidos`;
+`CBO`, `CBO`, ... na CAT). Esses casos saem com o sufixo padrão do pandas:
+`APS` e `APS.1`.
+
 ### Arquivos grandes
 
 Alguns meses de `beneficios_emitidos` e `beneficios_mantidos` descompactam
