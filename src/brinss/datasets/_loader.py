@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pandas as pd
 
-from . import _cache, _catalog, _reading
+from . import _cache, _catalog, _log, _reading
 from ._families import FAMILIES, DatasetFamily
 from ._period import PeriodoLike
 from .enums import XlsxEngine
@@ -48,7 +49,20 @@ def load_dataset(
 
     if as_dict:
         return frames
-    return pd.concat(frames.values(), ignore_index=True)
+
+    started_at = time.perf_counter()
+    combined = pd.concat(frames.values(), ignore_index=True)
+    if len(frames) > 1:
+        # With a single period this would just restate the message read_resource
+        # already emitted, so it is only worth logging when there is real work.
+        _log.get_logger().info(
+            "Concatenated %s periods: %s rows x %s columns in %s.",
+            len(frames),
+            f"{len(combined):,}",
+            len(combined.columns),
+            _log.format_seconds(time.perf_counter() - started_at),
+        )
+    return combined
 
 
 def list_datasets() -> list[str]:
