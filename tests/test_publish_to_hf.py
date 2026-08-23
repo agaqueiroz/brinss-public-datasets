@@ -8,6 +8,9 @@ import publish_to_hf as publish
 import pyarrow.parquet as pq
 import pytest
 
+from brinss.datasets import _cache
+from brinss.datasets._catalog import ResourceEntry
+
 
 def _manifest(**overrides) -> dict:
     entry = {
@@ -112,3 +115,146 @@ def test_dataset_card_declares_one_viewer_config_per_family():
 )
 def test_format_bytes(size, expected):
     assert publish.format_bytes(size) == expected
+
+
+def test_to_publishable_copy_is_shallow(monkeypatch):
+    # A deep copy here would duplicate every column of a frame that already runs
+    # to gigabytes on the heavy families, just to rewrite one column.
+    frame = pd.DataFrame({"periodo_referencia": [pd.Period("2024-06", freq="M")], "x": ["a"]})
+    seen = {}
+    original = pd.DataFrame.copy
+
+    def spy(self, deep=True):
+        seen["deep"] = deep
+        return original(self, deep=deep)
+
+    monkeypatch.setattr(pd.DataFrame, "copy", spy)
+    publish.to_publishable(frame)
+
+    assert seen["deep"] is False
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [(["2024-06"], ["2024-06"]), (["2024-6"], ["2024-06"]), (None, None), ([], None)],
+)
+def test_normalize_periodos_accepts_and_pads(given, expected):
+    # "2024-6" used to match no entry at all, so the run ended looking like a
+    # legitimate "nothing to do".
+    assert publish.normalize_periodos(given) == expected
+
+
+@pytest.mark.parametrize("given", ["2024-13", "junho", ""])
+def test_normalize_periodos_rejects_garbage(given):
+    with pytest.raises(SystemExit, match="periodo invalido"):
+        publish.normalize_periodos([given])
+
+
+def test_published_families_only_lists_what_the_manifest_has():
+    # A viewer config whose glob matches no file is a broken entry, so a partial
+    # rollout must not advertise families it has not reached.
+    manifest = {
+        "entries": {
+            "perfil_unidades/2026-07": {},
+            "beneficios_concedidos/2024-06": {},
+            "familia_que_sumiu/2024-06": {},
+        }
+    }
+
+    assert publish.published_families(manifest) == ["beneficios_concedidos", "perfil_unidades"]
+
+
+def test_published_families_of_an_empty_manifest():
+    assert publish.published_families(publish.empty_manifest()) == []
+
+
+def test_cached_source_finds_a_file_written_under_the_library_layout(tmp_path):
+    # Pins the private coupling: _cached_source rebuilds the cache path itself so
+    # a dry run does not have to download. A rename in _cache must fail here
+    # rather than silently reporting every cached month as missing.
+    entry = ResourceEntry(
+        period=pd.Period("2024-06", freq="M"),
+        url="https://fixtures.test/res.xlsx",
+        resource_id="res-1",
+        resource_name="Beneficios concedidos junho 2024",
+        package_slug="slug",
+        format="XLSX",
+    )
+    target = tmp_path / "files" / "beneficios_concedidos" / _cache._resource_filename(entry)
+    target.parent.mkdir(parents=True)
+
+    assert publish._cached_source(entry, "beneficios_concedidos", tmp_path) is None
+
+    target.write_bytes(b"conteudo")
+
+    assert publish._cached_source(entry, "beneficios_concedidos", tmp_path) == target
+
+
+def test_commit_batch_flushes_on_the_file_count(tmp_path):
+    # One upload per month meant one commit per month: ~300 on a first load.
+    commits = []
+
+    class FakeApi:
+        def create_commit(self, *, repo_id, repo_type, operations, commit_message):
+            commits.append([op.path_in_repo for op in operations])
+
+    manifest = publish.empty_manifest()
+    batch = publish.CommitBatch(api=FakeApi(), repo_id="r", manifest=manifest, max_files=2)
+
+    for index in range(3):
+        local = tmp_path / f"{index}.parquet"
+        local.write_bytes(b"x")
+        batch.add(local, f"data/f/{index}.parquet", (f"f/{index}", {"rows": index}), size=1)
+
+    assert commits == [["data/f/0.parquet", "data/f/1.parquet"]]
+    assert sorted(manifest["entries"]) == ["f/0", "f/1"]  # only what actually landed
+
+    batch.flush()
+
+    assert commits[-1] == ["data/f/2.parquet"]
+    assert sorted(manifest["entries"]) == ["f/0", "f/1", "f/2"]
+
+
+def test_commit_batch_flush_is_a_noop_when_empty():
+    class ExplodingApi:
+        def create_commit(self, **kwargs):
+            raise AssertionError("nao deveria commitar nada")
+
+    publish.CommitBatch(api=ExplodingApi(), repo_id="r", manifest=publish.empty_manifest()).flush()
+
+
+def test_commit_batch_removes_staged_files_after_the_commit(tmp_path):
+    # The staging directory holds whole months of Parquet; leaving them behind
+    # until the run ends would defeat the byte cap.
+    class FakeApi:
+        def create_commit(self, **kwargs):
+            pass
+
+    batch = publish.CommitBatch(api=FakeApi(), repo_id="r", manifest=publish.empty_manifest(), max_files=1)
+    local = tmp_path / "a.parquet"
+    local.write_bytes(b"x")
+    batch.add(local, "data/f/a.parquet", ("f/a", {}), size=1)
+
+    assert not local.exists()
+
+
+def test_no_hub_with_push_is_rejected(capsys):
+    code = publish.main(["--no-hub", "--push"])
+
+    assert code == 2
+    assert "incompativeis" in capsys.readouterr().err
+
+
+def test_push_without_any_token_is_rejected(monkeypatch, capsys):
+    # The gate used to read os.environ directly, so a user authenticated by
+    # `huggingface-cli login` -- token on disk, no env var -- was refused.
+    # get_token() covers both, which is why it is what gets stubbed here.
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
+    code = publish.main(["--push", "--familia", "perfil_unidades"])
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "HF_TOKEN" in err
+    assert "huggingface-cli login" in err  # the disk-stored token is a valid source
