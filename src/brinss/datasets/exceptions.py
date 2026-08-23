@@ -16,3 +16,7 @@ class PeriodUnavailableError(BrinssError, ValueError):
 
 class ColumnNotFoundError(BrinssError, KeyError):
     """A requested column is missing from one of the dataset's resources."""
+
+
+class UnsupportedArchiveError(BrinssError):
+    """A downloaded ZIP resource doesn't have the expected single-data-file layout."""
