@@ -219,6 +219,67 @@ import pooch
 pooch.get_logger().setLevel("WARNING")
 ```
 
+## Publicação em Parquet no Hugging Face
+
+O repositório traz um script de manutenção que converte os datasets para Parquet
+e publica em
+[huggingface.co/datasets/agaqueiroz/brinss-public-datasets](https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets).
+Ele vive em `scripts/`, fora de `src/brinss`, e portanto **não faz parte do
+pacote distribuído** — usa a própria biblioteca para ler os arquivos, herdando
+de graça o tratamento de banner, membros de ZIP e encoding.
+
+```bash
+uv run --group publish python scripts/publish_to_hf.py            # mostra o plano
+uv run --group publish python scripts/publish_to_hf.py --push     # publica
+```
+
+**Dry run é o padrão.** Sem `--push` o script apenas lista o que subiria e o que
+seria pulado. Publicar exige um token de escrita em `HF_TOKEN`, que o
+`huggingface_hub` lê sozinho.
+
+Flags úteis: `--familia` e `--periodo` (repetíveis) para restringir o escopo,
+`--limite N` para uma primeira carga parcial, `--force` para reenviar mesmo sem
+mudança e `--create-repo` para criar o repositório no Hub na primeira vez.
+
+### Layout publicado
+
+```
+data/<família>/<AAAA-MM>.parquet
+manifest.json
+README.md
+```
+
+Um arquivo por mês, por família — é o que torna o reenvio incremental possível:
+se só um mês mudou na origem, só ele sobe. O `README.md` é gerado com um config
+do viewer por família.
+
+### Como o script evita reenviar o que não mudou
+
+O `manifest.json` guarda, para cada arquivo publicado, o **SHA256 do arquivo de
+origem** de que ele foi gerado — o mesmo hash que a biblioteca já calcula para o
+cache local. Um mês só é reconvertido quando esse hash muda (o portal troca o
+conteúdo sem trocar o nome), quando a receita de conversão muda, ou com
+`--force`.
+
+O hash é o do arquivo **de origem**, e não o do Parquet, de propósito: Parquet
+não é byte-reproduzível entre versões do pyarrow, então comparar o resultado
+faria todo mês parecer alterado a cada execução.
+
+Como o portal não publica checksum, saber se um mês mudou exige ter o arquivo
+de origem em mãos. O manifesto poupa a parte cara — leitura, conversão e upload
+—, não o download. Para não transformar um simples `--push`-less em dezenas de
+GB de tráfego, o dry run **não baixa nada**: meses ainda ausentes do cache
+aparecem como `fonte ainda nao baixada`.
+
+### Tipos no Parquet
+
+As colunas saem como texto, pelo mesmo motivo descrito em
+[Tipos das colunas](#tipos-das-colunas). A exceção é `periodo_referencia`, que
+sai como string `AAAA-MM` em vez de `pandas.Period`: o Parquet guardaria o
+`Period` como um tipo de extensão do pandas sobre o ordinal do mês (`2024-06`
+vira `653`), e todo leitor que não fosse pandas — o viewer do Hugging Face,
+DuckDB, polars — mostraria um inteiro sem sentido.
+
 ## To-do
 
 - [x] Adicionar tópicos ao repositório no GitHub, para facilitar descoberta.
