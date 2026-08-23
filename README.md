@@ -234,12 +234,22 @@ uv run --group publish python scripts/publish_to_hf.py --push     # publica
 ```
 
 **Dry run é o padrão.** Sem `--push` o script apenas lista o que subiria e o que
-seria pulado. Publicar exige um token de escrita em `HF_TOKEN`, que o
-`huggingface_hub` lê sozinho.
+seria pulado. Publicar exige um token de escrita, seja em `HF_TOKEN` seja
+guardado em disco por `huggingface-cli login`.
 
 Flags úteis: `--familia` e `--periodo` (repetíveis) para restringir o escopo,
 `--limite N` para uma primeira carga parcial, `--force` para reenviar mesmo sem
-mudança e `--create-repo` para criar o repositório no Hub na primeira vez.
+mudança, `--create-repo` para criar o repositório no Hub na primeira vez e
+`--commit-size` para ajustar quantos arquivos entram em cada commit.
+
+Os arquivos sobem agrupados: um commit a cada `--commit-size` arquivos (padrão
+25) ou a cada 2 GB, o que vier primeiro, e sempre fechando no fim de cada
+família. Um commit por arquivo faria a primeira carga render umas 300 revisões
+no Hub, arriscando o rate limit no meio do caminho.
+
+O `README.md` do dataset é gerado, mas **só é escrito quando ainda não existe**
+no Hub — assim uma edição feita pela interface web não é sobrescrita a cada
+execução. Para regerá-lo de propósito, use `--update-card`.
 
 ### Layout publicado
 
