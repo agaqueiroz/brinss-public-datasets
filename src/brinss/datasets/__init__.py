@@ -12,6 +12,10 @@ Exemplo::
     df = load_beneficios_concedidos(periodo="2024-06")          # um mês
     df = load_beneficios_concedidos(periodo=("2024-01", "2024-06"))  # intervalo
     df = load_beneficios_concedidos(periodo="all")               # todo o histórico disponível
+
+Por padrão todas as colunas vêm como texto (``str``), preservando zeros à
+esquerda em códigos como CID, CBO, CNAE e código IBGE. Para deixar o pandas
+inferir os tipos, passe ``dtype="infer"``.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import pandas as pd
 from . import _cache
 from ._loader import list_datasets, list_periods, load_dataset
 from ._period import PeriodoLike
-from .enums import XlsxEngine
+from .enums import ColumnDtype, XlsxEngine
 from .exceptions import (
     BrinssError,
     CkanUnavailableError,
@@ -36,6 +40,7 @@ from .exceptions import (
 __all__ = [
     "BrinssError",
     "CkanUnavailableError",
+    "ColumnDtype",
     "ColumnNotFoundError",
     "PeriodError",
     "PeriodUnavailableError",

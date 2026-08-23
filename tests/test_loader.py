@@ -135,3 +135,46 @@ def test_load_dataset_unavailable_period_raises(cache_dir):
 def test_load_dataset_unknown_family_raises_key_error(cache_dir):
     with pytest.raises(KeyError):
         _loader.load_dataset("familia-inexistente", cache_dir=cache_dir)
+
+
+@responses.activate
+def test_load_dataset_defaults_to_string_columns(cache_dir, make_xlsx_bytes):
+    resources = [
+        _resource("Benefícios concedidos junho 2024", "res-06", "https://fixtures.test/concedidos/junho-2024.xlsx"),
+    ]
+    _mock_package_show(resources)
+    responses.add(
+        responses.GET,
+        resources[0]["url"],
+        body=make_xlsx_bytes([{"beneficio": "aposentadoria", "valor": 1500}]),
+        status=200,
+    )
+
+    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir)
+
+    assert df.loc[0, "valor"] == "1500"
+
+
+@responses.activate
+def test_load_dataset_dtype_infer_reaches_the_reader(cache_dir, make_xlsx_bytes):
+    resources = [
+        _resource("Benefícios concedidos junho 2024", "res-06", "https://fixtures.test/concedidos/junho-2024.xlsx"),
+    ]
+    _mock_package_show(resources)
+    responses.add(
+        responses.GET,
+        resources[0]["url"],
+        body=make_xlsx_bytes([{"beneficio": "aposentadoria", "valor": 1500}]),
+        status=200,
+    )
+
+    df = _loader.load_dataset("beneficios_concedidos", dtype="infer", cache_dir=cache_dir)
+
+    assert df.loc[0, "valor"] == 1500
+
+
+def test_load_dataset_invalid_dtype_raises_before_downloading(cache_dir):
+    # No responses are registered: reaching the network at all would error
+    # differently, which is the point -- the check happens up front.
+    with pytest.raises(ValueError, match="dtype invalido"):
+        _loader.load_dataset("beneficios_concedidos", dtype="texto", cache_dir=cache_dir)
