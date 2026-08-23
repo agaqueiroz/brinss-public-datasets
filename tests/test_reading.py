@@ -95,3 +95,67 @@ def test_read_resource_missing_column_raises_for_xlsx(tmp_path, make_xlsx_bytes)
     path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS))
     with pytest.raises(ColumnNotFoundError, match="Beneficios emitidos junho 2024"):
         read_resource(path, _entry(format_="XLSX"), columns=["coluna_inexistente"], engine=XlsxEngine.OPENPYXL)
+
+
+# The real "beneficios" spreadsheets open with a one-cell title row above the
+# header, which shifts every column and turns their names into "Unnamed: N".
+BANNER = "DADOS ABERTOS - BENEFICIOS CONCEDIDOS - ANO JULHO DE 2026"
+
+
+def test_read_resource_xlsx_skips_banner_row(tmp_path, make_xlsx_bytes):
+    path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS, banner=BANNER))
+    df = read_resource(path, _entry(format_="XLSX"), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert not [column for column in df.columns if str(column).startswith("Unnamed")]
+    assert len(df) == 2  # the banner is dropped, not carried in as a data row
+    assert df.loc[0, "beneficio"] == "aposentadoria"
+
+
+def test_read_resource_xlsx_without_banner_is_unchanged(tmp_path, make_xlsx_bytes):
+    # Guards perfil_unidades, whose sheets already start with a proper header.
+    path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS))
+    df = read_resource(path, _entry(format_="XLSX"), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert len(df) == 2
+
+
+def test_read_resource_xlsx_duplicate_headers_get_pandas_suffix(tmp_path, make_xlsx_bytes):
+    # concedidos repeats names for code/description pairs: APS, APS, Especie, Especie...
+    data = make_xlsx_bytes(ROWS, banner=BANNER, headers=["APS", "APS"])
+    path = _write(tmp_path, "res.xlsx", data)
+    df = read_resource(path, _entry(format_="XLSX"), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "APS", "APS.1"]
+
+
+def test_read_resource_xlsx_with_banner_accepts_real_column_names(tmp_path, make_xlsx_bytes):
+    # Before the header row was detected, columns= could not work on these files
+    # at all: the names to ask for were "Unnamed: 1", "Unnamed: 2", ...
+    path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS, banner=BANNER))
+    df = read_resource(path, _entry(format_="XLSX"), columns=["beneficio"], engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio"]
+    assert list(df["beneficio"]) == ["aposentadoria", "auxilio"]
+
+
+def test_read_resource_xlsx_with_banner_inside_zip(tmp_path, make_xlsx_bytes):
+    # Exercises the io.BytesIO branch of _read_zip, where the peek at the header
+    # leaves the stream at EOF unless it is rewound.
+    buffer_path = tmp_path / "res.zip"
+    with zipfile.ZipFile(buffer_path, "w") as archive:
+        archive.writestr("dados.xlsx", make_xlsx_bytes(ROWS, banner=BANNER))
+
+    df = read_resource(buffer_path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert len(df) == 2
+
+
+def test_read_resource_legacy_xls_skips_banner_row(tmp_path, make_xls_bytes):
+    path = _write(tmp_path, "res.xls", make_xls_bytes(ROWS, banner=BANNER))
+    df = read_resource(path, _entry(format_="XLS"), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert len(df) == 2
