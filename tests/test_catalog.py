@@ -49,7 +49,7 @@ def test_build_catalog_parses_resources_and_skips_unparseable(load_fixture, cach
 
 @responses.activate
 def test_build_catalog_uses_disk_cache_within_ttl(load_fixture, cache_dir):
-    fixture = load_fixture("package_show_beneficios_concedidos.json")
+    fixture = load_fixture("package_show_minimal.json")
     _mock_package_show(SLUG, fixture)
     family = DatasetFamily(key="beneficios_concedidos", title="x", slugs=(SLUG,))
 
@@ -62,7 +62,7 @@ def test_build_catalog_uses_disk_cache_within_ttl(load_fixture, cache_dir):
 
 @responses.activate
 def test_build_catalog_force_refresh_falls_back_to_stale_cache_with_warning(load_fixture, cache_dir):
-    fixture = load_fixture("package_show_beneficios_concedidos.json")
+    fixture = load_fixture("package_show_minimal.json")
     _mock_package_show(SLUG, fixture)
     family = DatasetFamily(key="beneficios_concedidos", title="x", slugs=(SLUG,))
     _catalog.build_catalog(family, cache_dir=cache_dir)

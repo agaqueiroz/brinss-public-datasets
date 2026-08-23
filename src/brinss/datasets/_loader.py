@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pandas as pd
 
-from . import _cache, _catalog
+from . import _cache, _catalog, _reading
 from ._families import FAMILIES, DatasetFamily
 from ._period import PeriodoLike
 from .enums import XlsxEngine
-from .exceptions import ColumnNotFoundError
 
 
 def _get_family(name: str) -> DatasetFamily:
@@ -18,30 +16,6 @@ def _get_family(name: str) -> DatasetFamily:
     except KeyError as exc:
         available = ", ".join(sorted(FAMILIES))
         raise KeyError(f"dataset desconhecido: {name!r}. Disponiveis: {available}.") from exc
-
-
-def _read_resource(
-    path: Path,
-    entry: _catalog.ResourceEntry,
-    *,
-    columns: list[str] | None,
-    engine: XlsxEngine,
-) -> pd.DataFrame:
-    read_kwargs = {"usecols": columns} if columns is not None else {}
-    try:
-        if entry.format.upper() == "CSV":
-            frame = pd.read_csv(path, **read_kwargs)
-        else:
-            frame = pd.read_excel(path, engine=engine.value, **read_kwargs)
-    except ValueError as exc:
-        if columns is not None:
-            raise ColumnNotFoundError(
-                f"coluna solicitada nao encontrada no recurso '{entry.resource_name}' ({entry.period}): {exc}"
-            ) from exc
-        raise
-
-    frame.insert(0, "periodo_referencia", entry.period)
-    return frame
 
 
 def load_dataset(
@@ -70,7 +44,7 @@ def load_dataset(
         path = _cache.fetch_resource(
             entry, family_key=family.key, cache_dir=cache_root, force_download=force_download
         )
-        frames[str(period)] = _read_resource(path, entry, columns=columns, engine=engine)
+        frames[str(period)] = _reading.read_resource(path, entry, columns=columns, engine=engine)
 
     if as_dict:
         return frames

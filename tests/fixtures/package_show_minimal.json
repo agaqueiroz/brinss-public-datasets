@@ -1,0 +1,35 @@
+{
+  "help": "https://dadosabertos.inss.gov.br/api/3/action/help_show?name=package_show",
+  "success": true,
+  "result": {
+    "id": "fixture-package-id-minimal",
+    "name": "beneficios-concedidos-plano-de-dados-abertos-jun-2023-a-jun-2025",
+    "title": "Benefícios concedidos - Plano de Dados Abertos Jun/2023 a jun/2025",
+    "resources": [
+      {
+        "id": "res-2024-04",
+        "name": "Benefícios concedidos abril 2024",
+        "format": "XLSX",
+        "url": "https://fixtures.test/concedidos/abril-2024.xlsx",
+        "hash": "",
+        "size": null
+      },
+      {
+        "id": "res-2024-05",
+        "name": "Benefícios concedidos maio 2024",
+        "format": "XLSX",
+        "url": "https://fixtures.test/concedidos/maio-2024.xlsx",
+        "hash": "",
+        "size": null
+      },
+      {
+        "id": "res-2024-06",
+        "name": "Benefícios concedidos junho 2024",
+        "format": "XLSX",
+        "url": "https://fixtures.test/concedidos/junho-2024.xlsx",
+        "hash": "",
+        "size": null
+      }
+    ]
+  }
+}
