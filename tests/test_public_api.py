@@ -5,7 +5,9 @@ import brinss.datasets as ds
 EXPECTED_FAMILY_KEYS = {
     "beneficios_concedidos",
     "beneficios_emitidos",
-    "beneficios_mantidos",
+    "beneficios_mantidos_ativos",
+    "beneficios_mantidos_cessados",
+    "beneficios_mantidos_suspensos",
     "beneficios_indeferidos",
     "comunicacoes_acidente_trabalho",
     "perfil_unidades",
@@ -27,7 +29,9 @@ def test_load_wrappers_delegate_to_load_dataset_with_the_right_family_key(monkey
 
     assert ds.load_beneficios_concedidos() == "ok"
     assert ds.load_beneficios_emitidos() == "ok"
-    assert ds.load_beneficios_mantidos() == "ok"
+    assert ds.load_beneficios_mantidos_ativos() == "ok"
+    assert ds.load_beneficios_mantidos_cessados() == "ok"
+    assert ds.load_beneficios_mantidos_suspensos() == "ok"
     assert ds.load_beneficios_indeferidos() == "ok"
     assert ds.load_comunicacoes_acidente_trabalho() == "ok"
     assert ds.load_perfil_unidades() == "ok"

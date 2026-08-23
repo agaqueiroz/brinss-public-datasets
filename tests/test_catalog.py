@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import pandas as pd
 import pytest
 import responses
@@ -116,7 +118,7 @@ def test_build_catalog_sibling_overlap_last_slug_wins(cache_dir):
     _mock_package_show(new_slug, new_fixture)
     family = DatasetFamily(key="familia", title="x", slugs=(old_slug, new_slug))
 
-    with pytest.warns(UserWarning, match="presente em mais de um pacote"):
+    with pytest.warns(UserWarning, match="reivindicado por mais de um recurso"):
         catalog = _catalog.build_catalog(family, cache_dir=cache_dir)
 
     assert len(catalog.entries) == 1
@@ -160,3 +162,108 @@ def test_resolve_periods_empty_catalog_raises():
     catalog = _catalog.DatasetCatalog(family=family, entries=())
     with pytest.raises(PeriodUnavailableError):
         _catalog.resolve_periods(catalog, None)
+
+
+MANTIDOS_SLUG = "beneficios-mantidos-plano-de-dados-abertos-jun-2023-a-jun-2025"
+
+
+def _mantidos_family(categoria: str) -> DatasetFamily:
+    return DatasetFamily(
+        key=f"beneficios_mantidos_{categoria}",
+        title=f"Benefícios mantidos {categoria}",
+        slugs=(MANTIDOS_SLUG,),
+        resource_filter=categoria,
+    )
+
+
+@responses.activate
+def test_build_catalog_resource_filter_keeps_only_its_category(load_fixture, cache_dir):
+    # The mantidos package publishes ativos, cessados and suspensos side by side.
+    fixture = load_fixture("package_show_beneficios_mantidos.json")
+    _mock_package_show(MANTIDOS_SLUG, fixture)
+
+    catalog = _catalog.build_catalog(_mantidos_family("cessados"), cache_dir=cache_dir)
+
+    assert [entry.resource_name for entry in catalog.entries] == [
+        "Benefícios Mantidos Cessados abril 2025",
+        "Benefícios Mantidos Cessados maio 2025",
+    ]
+
+
+@responses.activate
+def test_build_catalog_resource_filter_runs_before_period_parsing(cache_dir):
+    # Resources of other categories must be dropped silently, not warned about.
+    fixture = {
+        "success": True,
+        "result": {
+            "resources": [
+                {"id": "a", "name": "Benefícios Mantidos Ativos", "format": "CSV", "url": "https://f.test/a.zip"},
+                {
+                    "id": "s",
+                    "name": "Benefícios Mantidos Suspensos junho 2024",
+                    "format": "CSV",
+                    "url": "https://f.test/s.zip",
+                },
+            ]
+        },
+    }
+    _mock_package_show(MANTIDOS_SLUG, fixture)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the unparseable "Ativos" resource must not reach the warning
+        catalog = _catalog.build_catalog(_mantidos_family("suspensos"), cache_dir=cache_dir)
+
+    assert [str(entry.period) for entry in catalog.entries] == ["2024-06"]
+
+
+@responses.activate
+def test_build_catalog_url_settles_mislabeled_period(load_fixture, cache_dir):
+    # Two resources named "Suspensos abril 2025"; the second is really 202505.
+    fixture = load_fixture("package_show_beneficios_mantidos.json")
+    _mock_package_show(MANTIDOS_SLUG, fixture)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the URLs settle it, so nothing should be warned about
+        catalog = _catalog.build_catalog(_mantidos_family("suspensos"), cache_dir=cache_dir)
+
+    assert [str(entry.period) for entry in catalog.entries] == ["2025-04", "2025-05"]
+    by_period = catalog.entries_by_period
+    assert by_period[pd.Period("2025-04", freq="M")].url.endswith("MANSUSPENSOS.202504.CSV.ZIP")
+    assert by_period[pd.Period("2025-05", freq="M")].url.endswith("MANSUSPENSOS.202505.CSV.ZIP")
+
+
+@responses.activate
+def test_build_catalog_url_settles_mislabeled_period_in_either_order(load_fixture, cache_dir):
+    # Same package with the resources reversed: now the mislabeled one is seated
+    # first and has to be moved out of the way instead.
+    fixture = load_fixture("package_show_beneficios_mantidos.json")
+    fixture["result"]["resources"].reverse()
+    _mock_package_show(MANTIDOS_SLUG, fixture)
+
+    catalog = _catalog.build_catalog(_mantidos_family("suspensos"), cache_dir=cache_dir)
+
+    by_period = catalog.entries_by_period
+    assert [str(entry.period) for entry in catalog.entries] == ["2025-04", "2025-05"]
+    assert by_period[pd.Period("2025-04", freq="M")].url.endswith("MANSUSPENSOS.202504.CSV.ZIP")
+    assert by_period[pd.Period("2025-05", freq="M")].url.endswith("MANSUSPENSOS.202505.CSV.ZIP")
+
+
+@responses.activate
+def test_build_catalog_collision_without_url_stamp_still_warns(cache_dir):
+    fixture = {
+        "success": True,
+        "result": {
+            "resources": [
+                {"id": "1", "name": "Recurso junho 2024", "format": "XLSX", "url": "https://f.test/primeiro.xlsx"},
+                {"id": "2", "name": "Recurso junho 2024", "format": "XLSX", "url": "https://f.test/segundo.xlsx"},
+            ]
+        },
+    }
+    _mock_package_show(SLUG, fixture)
+    family = DatasetFamily(key="familia", title="x", slugs=(SLUG,))
+
+    with pytest.warns(UserWarning, match="reivindicado por mais de um recurso"):
+        catalog = _catalog.build_catalog(family, cache_dir=cache_dir)
+
+    assert len(catalog.entries) == 1
+    assert catalog.entries[0].resource_id == "2"  # last one seen wins, as before

@@ -1,0 +1,59 @@
+{
+  "help": "https://dadosabertos.inss.gov.br/api/3/action/help_show?name=package_show",
+  "success": true,
+  "result": {
+    "id": "fixture-package-id",
+    "name": "beneficios-mantidos-plano-de-dados-abertos-jun-2023-a-jun-2025",
+    "title": "Benefícios mantidos - Plano de Dados Abertos Jun/2023 a jun/2025",
+    "resources": [
+      {
+        "id": "res-manativos-202504",
+        "name": "Benefícios Mantidos Ativos abril 2025",
+        "format": "CSV",
+        "url": "https://fixtures.test/mantidos/D.SDA.PDA.004.MANATIVOS.202504.CSV.ZIP",
+        "hash": "",
+        "size": null
+      },
+      {
+        "id": "res-mancessados-202504",
+        "name": "Benefícios Mantidos Cessados abril 2025",
+        "format": "CSV",
+        "url": "https://fixtures.test/mantidos/D.SDA.PDA.004.MANCESSADOS.202504.CSV.ZIP",
+        "hash": "",
+        "size": null
+      },
+      {
+        "id": "res-mansuspensos-202504",
+        "name": "Benefícios Mantidos Suspensos abril 2025",
+        "format": "CSV",
+        "url": "https://fixtures.test/mantidos/D.SDA.PDA.004.MANSUSPENSOS.202504.CSV.ZIP",
+        "hash": "",
+        "size": null
+      },
+      {
+        "id": "res-manativos-202505",
+        "name": "Benefícios Mantidos Ativos maio 2025",
+        "format": "CSV",
+        "url": "https://fixtures.test/mantidos/D.SDA.PDA.004.MANATIVOS.202505.CSV.ZIP",
+        "hash": "",
+        "size": null
+      },
+      {
+        "id": "res-mancessados-202505",
+        "name": "Benefícios Mantidos Cessados maio 2025",
+        "format": "CSV",
+        "url": "https://fixtures.test/mantidos/D.SDA.PDA.004.MANCESSADOS.202505.CSV.ZIP",
+        "hash": "",
+        "size": null
+      },
+      {
+        "id": "res-mansuspensos-202505",
+        "name": "Benefícios Mantidos Suspensos abril 2025",
+        "format": "CSV",
+        "url": "https://fixtures.test/mantidos/D.SDA.PDA.004.MANSUSPENSOS.202505.CSV.ZIP",
+        "hash": "",
+        "size": null
+      }
+    ]
+  }
+}
