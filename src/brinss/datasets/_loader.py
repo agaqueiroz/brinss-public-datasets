@@ -8,7 +8,7 @@ import pandas as pd
 from . import _cache, _catalog, _log, _reading
 from ._families import FAMILIES, DatasetFamily
 from ._period import PeriodoLike
-from .enums import XlsxEngine
+from .enums import ColumnDtype, XlsxEngine
 
 
 def _get_family(name: str) -> DatasetFamily:
@@ -19,12 +19,22 @@ def _get_family(name: str) -> DatasetFamily:
         raise KeyError(f"dataset desconhecido: {name!r}. Disponiveis: {available}.") from exc
 
 
+def _coerce_dtype(value: ColumnDtype | str) -> ColumnDtype:
+    """Validate ``dtype`` up front, before any (possibly multi-GB) download."""
+    try:
+        return ColumnDtype(value)
+    except ValueError as exc:
+        accepted = ", ".join(repr(member.value) for member in ColumnDtype)
+        raise ValueError(f"dtype invalido: {value!r}. Aceitos: {accepted}.") from exc
+
+
 def load_dataset(
     name: str,
     periodo: PeriodoLike = None,
     *,
     as_dict: bool = False,
     columns: list[str] | None = None,
+    dtype: ColumnDtype | str = ColumnDtype.STRING,
     force_download: bool = False,
     force_refresh: bool = False,
     cache_dir: str | os.PathLike | None = None,
@@ -35,6 +45,7 @@ def load_dataset(
     See ``brinss.datasets`` module docs for the full parameter reference.
     """
     family = _get_family(name)
+    dtype = _coerce_dtype(dtype)
     cache_root = _cache.get_cache_root(cache_dir)
     catalog = _catalog.build_catalog(family, cache_dir=cache_root, force_refresh=force_refresh)
     periods = _catalog.resolve_periods(catalog, periodo)
@@ -45,7 +56,7 @@ def load_dataset(
         path = _cache.fetch_resource(
             entry, family_key=family.key, cache_dir=cache_root, force_download=force_download
         )
-        frames[str(period)] = _reading.read_resource(path, entry, columns=columns, engine=engine)
+        frames[str(period)] = _reading.read_resource(path, entry, columns=columns, engine=engine, dtype=dtype)
 
     if as_dict:
         return frames
