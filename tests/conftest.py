@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import zipfile
 from pathlib import Path
 
@@ -9,12 +10,32 @@ import openpyxl
 import pytest
 import xlwt
 
+from brinss.datasets import _log
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
 def cache_dir(tmp_path: Path) -> Path:
     return tmp_path / "cache"
+
+
+@pytest.fixture
+def brinss_logs(caplog):
+    """Capture the library's progress messages.
+
+    The ``brinss`` logger does not propagate to the root logger (so that an
+    application's own logging config does not print every message twice),
+    which also means caplog's root handler never sees it -- hence attaching
+    that handler to the logger directly.
+    """
+    logger = _log.get_logger()
+    caplog.set_level(logging.INFO, logger=_log.LOGGER_NAME)
+    logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
 
 
 @pytest.fixture

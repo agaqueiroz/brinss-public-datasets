@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 
 import platformdirs
 import pooch
 
-from . import _ckan
+from . import _ckan, _log
 from ._catalog import ResourceEntry
 
 APP_NAME = "brinss"
@@ -94,7 +95,22 @@ def fetch_resource(
         registry={filename: known_hash},
         urls={filename: entry.url},
     )
+
+    # pooch logs when it starts downloading but not when it finishes, and says
+    # nothing at all on a cache hit. Comparing the mtime around the fetch tells
+    # the two apart -- it also catches the case where the hash did not match and
+    # pooch silently re-downloaded over the cached copy.
+    mtime_before = target_path.stat().st_mtime_ns if target_path.exists() else None
+    started_at = time.perf_counter()
     fetched = Path(fetcher.fetch(filename))
+    elapsed = time.perf_counter() - started_at
+
+    size = _log.format_bytes(fetched.stat().st_size)
+    logger = _log.get_logger()
+    if fetched.stat().st_mtime_ns != mtime_before:
+        logger.info("Download complete: '%s' (%s) in %s.", filename, size, _log.format_seconds(elapsed))
+    else:
+        logger.info("Using cached file '%s' (%s).", filename, size)
 
     if known_hash is None:
         digest = hashlib.sha256(fetched.read_bytes()).hexdigest()

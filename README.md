@@ -96,9 +96,43 @@ exigir bastante RAM e espaço em disco. Nenhum limite é aplicado
 automaticamente nesta versão — prefira pedir um `periodo` específico e, se
 precisar, usar `columns=[...]` para reduzir o volume carregado em memória.
 
+### Mensagens de progresso
+
+Cada chamada de `load_*` escreve no `stderr` o andamento de cada período:
+conclusão do download (ou aviso de que o arquivo veio do cache), início e fim
+da leitura para o DataFrame, e — quando há mais de um período — a
+concatenação final:
+
+```
+Downloading file 'res-06__Benefícios concedidos junho 2024.xlsx' from '...' to '...'.
+Download complete: 'res-06__Benefícios concedidos junho 2024.xlsx' (12.4 MB) in 8.3 s.
+Reading 'res-06__Benefícios concedidos junho 2024.xlsx' (12.4 MB) into a DataFrame...
+DataFrame loaded: 148,203 rows x 17 columns from 'res-06__Benefícios concedidos junho 2024.xlsx' in 4.1 s.
+```
+
+As mensagens saem pelo logger `brinss` e podem ser silenciadas (ou
+redirecionadas) com o `logging` padrão:
+
+```python
+import logging
+
+logging.getLogger("brinss").setLevel(logging.WARNING)
+```
+
+A primeira linha (`Downloading file ...`) é do
+[`pooch`](https://www.fatiando.org/pooch/), e se silencia à parte:
+
+```python
+import pooch
+
+pooch.get_logger().setLevel("WARNING")
+```
+
 ## To-do
 
 - [x] Adicionar tópicos ao repositório no GitHub, para facilitar descoberta.
+- [x] Adicionar mensagem quando o download do dataset for concluído
+- [x] Adicionar mensagem de início e conclusão do carregamento no dataframe
 - [ ] Suportar as séries históricas mais antigas (2012–2023), publicadas em
       arquivos ZIP com granularidade anual (ex: `beneficios-concedidos-dez-2012-a-nov-2018-...`).
 - [ ] Suportar a segunda camada de pacotes legados (`inss-beneficios-*`, até
