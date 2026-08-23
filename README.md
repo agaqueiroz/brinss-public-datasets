@@ -87,6 +87,14 @@ planilha OOXML dentro é lido como Excel; ZIP com um único CSV dentro é
 descompactado e o CSV é lido com detecção automática de delimitador/encoding;
 Excel binário legado (`.xls` no formato antigo OLE2) é lido via `xlrd`.
 
+Os recursos da CAT (`comunicacoes_acidente_trabalho`) vão além: trazem **o mesmo
+dado três vezes** dentro do ZIP, em `.csv`, `.json` e `.xml`. Nesse caso (membros
+que só diferem na extensão) a biblioteca lê a versão tabular — o CSV — e registra
+no log qual membro foi lido e quais foram ignorados; os outros formatos ficam
+intactos dentro do arquivo em cache, sem serem descompactados. Um ZIP com
+datasets **diferentes** dentro continua sendo erro (`UnsupportedArchiveError`),
+já que não haveria como saber qual deles carregar.
+
 ### Cabeçalho das planilhas
 
 As planilhas de `beneficios_concedidos` e `beneficios_indeferidos` abrem com

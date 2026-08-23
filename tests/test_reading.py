@@ -76,6 +76,66 @@ def test_read_resource_zip_with_two_data_members_raises(tmp_path, make_csv_zip_b
         read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
 
 
+# The CAT resources ship the same dataset three times over inside one zip:
+# D.SDA.PDA.005.CAT.202605.csv, .json and .xml.
+CAT_STEM = "D.SDA.PDA.005.CAT.202605"
+
+
+def test_read_resource_zip_with_same_dataset_in_three_formats_reads_csv(tmp_path, make_csv_zip_bytes):
+    data = make_csv_zip_bytes(
+        ROWS,
+        member_name=f"{CAT_STEM}.csv",
+        extra_members={
+            f"{CAT_STEM}.json": b'[{"beneficio": "aposentadoria"}]',
+            f"{CAT_STEM}.xml": b"<dados><registro/></dados>",
+        },
+    )
+    path = _write(tmp_path, "res.ZIP", data)
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert len(df) == 2
+    assert set(df["beneficio"]) == {"aposentadoria", "auxilio"}
+
+
+def test_read_resource_zip_logs_the_member_read_and_the_ignored_ones(
+    tmp_path, make_csv_zip_bytes, brinss_logs
+):
+    data = make_csv_zip_bytes(
+        ROWS,
+        member_name=f"{CAT_STEM}.csv",
+        extra_members={f"{CAT_STEM}.json": b"[]", f"{CAT_STEM}.xml": b"<dados/>"},
+    )
+    path = _write(tmp_path, "res.ZIP", data)
+    read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert f"reading '{CAT_STEM}.csv'" in brinss_logs.text
+    assert f"{CAT_STEM}.json" in brinss_logs.text
+    assert f"{CAT_STEM}.xml" in brinss_logs.text
+
+
+def test_read_resource_zip_prefers_csv_over_xlsx_for_the_same_stem(tmp_path, make_csv_zip_bytes, make_xlsx_bytes):
+    data = make_csv_zip_bytes(
+        ROWS,
+        member_name="dados.csv",
+        extra_members={"dados.xlsx": make_xlsx_bytes([{"outra": "coluna"}])},
+    )
+    path = _write(tmp_path, "res.zip", data)
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+
+
+def test_read_resource_zip_with_no_tabular_member_raises(tmp_path):
+    path = tmp_path / "res.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"{CAT_STEM}.json", b"[]")
+        archive.writestr(f"{CAT_STEM}.xml", b"<dados/>")
+
+    with pytest.raises(UnsupportedArchiveError):
+        read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+
 def test_read_resource_zip_with_no_data_members_raises(tmp_path):
     buffer_path = tmp_path / "empty.zip"
     with zipfile.ZipFile(buffer_path, "w") as archive:
