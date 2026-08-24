@@ -233,6 +233,25 @@ uv run --group publish python scripts/publish_to_hf.py            # mostra o pla
 uv run --group publish python scripts/publish_to_hf.py --push     # publica
 ```
 
+### Gerar amostras locais
+
+Antes de publicar qualquer coisa, `--sample` converte para Parquet **só o que já
+está no cache de downloads**, gravando em `tmp/` (ignorada pelo git):
+
+```bash
+uv run --group publish python scripts/publish_to_hf.py --sample
+```
+
+Ele nunca baixa nada e nunca fala com o Hub — meses ausentes do cache são
+reportados e pulados. É a forma barata de conferir o resultado real antes de
+encarar uma publicação completa, que são **291 arquivos** e dezenas de GB
+vindos do portal.
+
+O layout em `tmp/` espelha o do Hub (`tmp/data/<família>/<AAAA-MM>.parquet`),
+então o que você inspecta é exatamente o que seria publicado. Arquivos já
+gerados são pulados; use `--force` para refazer, ou `--sample-dir` para gravar
+em outro lugar.
+
 **Dry run é o padrão.** Sem `--push` o script apenas lista o que subiria e o que
 seria pulado. Publicar exige um token de escrita, seja em `HF_TOKEN` seja
 guardado em disco por `huggingface-cli login`.
