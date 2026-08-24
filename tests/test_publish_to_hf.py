@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+from types import SimpleNamespace
 
 import pandas as pd
 import publish_to_hf as publish
@@ -258,3 +259,80 @@ def test_push_without_any_token_is_rejected(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "HF_TOKEN" in err
     assert "huggingface-cli login" in err  # the disk-stored token is a valid source
+
+
+def _sample_args(tmp_path, *, force=False):
+    return SimpleNamespace(sample_dir=str(tmp_path / "tmp"), force=force)
+
+
+def _entry() -> ResourceEntry:
+    return ResourceEntry(
+        period=pd.Period("2024-06", freq="M"),
+        url="https://fixtures.test/res.csv",
+        resource_id="res-1",
+        resource_name="Perfil das Unidades Junho 2024",
+        package_slug="slug",
+        format="CSV",
+    )
+
+
+def test_sample_mirrors_the_repo_layout_under_the_sample_dir(tmp_path, make_csv_bytes):
+    # The local tree matches path_in_repo so what you inspect is exactly what
+    # the Hub would receive.
+    source = tmp_path / "res.csv"
+    source.write_bytes(make_csv_bytes([{"codigo": "01234", "valor": 1500}]))
+    plan = publish.Plan()
+    target = publish.path_in_repo("perfil_unidades", "2024-06")
+
+    publish._sample_one(_sample_args(tmp_path), _entry(), "perfil_unidades", "2024-06", source, target, plan)
+
+    written = tmp_path / "tmp" / "data" / "perfil_unidades" / "2024-06.parquet"
+    assert written.exists()
+    assert plan.uploads == [("perfil_unidades", "2024-06", "amostra")]
+    assert plan.written_bytes == written.stat().st_size
+
+    table = pq.read_table(written)
+    assert table.column("codigo").to_pylist() == ["01234"]
+    assert table.column("periodo_referencia").to_pylist() == ["2024-06"]
+
+
+def test_sample_skips_a_month_that_is_not_cached(tmp_path):
+    # --sample must never download: that is the whole reason it exists, since a
+    # full run pulls tens of GB from the portal.
+    plan = publish.Plan()
+
+    publish._sample_one(_sample_args(tmp_path), _entry(), "perfil_unidades", "2024-06", None, "t", plan)
+
+    assert plan.skipped == [("perfil_unidades", "2024-06")]
+    assert plan.uploads == []
+    assert not (tmp_path / "tmp").exists()
+
+
+def test_sample_does_not_redo_an_existing_file_unless_forced(tmp_path, make_csv_bytes):
+    source = tmp_path / "res.csv"
+    source.write_bytes(make_csv_bytes([{"codigo": "01234"}]))
+    target = publish.path_in_repo("perfil_unidades", "2024-06")
+    written = tmp_path / "tmp" / "data" / "perfil_unidades" / "2024-06.parquet"
+    written.parent.mkdir(parents=True)
+    written.write_bytes(b"placeholder")
+
+    plan = publish.Plan()
+    publish._sample_one(_sample_args(tmp_path), _entry(), "perfil_unidades", "2024-06", source, target, plan)
+
+    assert plan.skipped == [("perfil_unidades", "2024-06")]
+    assert written.read_bytes() == b"placeholder"
+
+    forced = publish.Plan()
+    publish._sample_one(
+        _sample_args(tmp_path, force=True), _entry(), "perfil_unidades", "2024-06", source, target, forced
+    )
+
+    assert forced.uploads == [("perfil_unidades", "2024-06", "amostra")]
+    assert written.read_bytes() != b"placeholder"
+
+
+def test_sample_with_push_is_rejected(capsys):
+    code = publish.main(["--sample", "--push"])
+
+    assert code == 2
+    assert "incompativeis" in capsys.readouterr().err

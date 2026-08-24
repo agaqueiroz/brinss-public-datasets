@@ -25,7 +25,13 @@ download -- and on a machine with a warm cache the download is a no-op anyway.
 Usage::
 
     uv run --group publish python scripts/publish_to_hf.py            # dry run
+    uv run --group publish python scripts/publish_to_hf.py --sample   # local only
     uv run --group publish python scripts/publish_to_hf.py --push     # for real
+
+``--sample`` converts whatever is already in the download cache into ``tmp/``,
+mirroring the layout the Hub would get. It never downloads and never contacts
+the Hub, which makes it the cheap way to eyeball the real output: a full
+``--push`` is 291 files and pulls tens of GB from the portal.
 
 Pushing needs a write token, either in ``HF_TOKEN`` or stored on disk by
 ``huggingface-cli login``.
@@ -46,6 +52,9 @@ import pandas as pd
 from brinss.datasets import _cache, _catalog, _reading
 from brinss.datasets._families import FAMILIES
 from brinss.datasets.enums import ColumnDtype, XlsxEngine
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_SAMPLE_DIR = REPO_ROOT / "tmp"
 
 DEFAULT_REPO_ID = "agaqueiroz/brinss-public-datasets"
 MANIFEST_PATH = "manifest.json"
@@ -320,6 +329,44 @@ def _cached_source(entry, family_key: str, cache_root: Path) -> Path | None:
     return path if path.exists() else None
 
 
+def _sample_one(
+    args: argparse.Namespace,
+    entry,
+    family_key: str,
+    period: str,
+    source: Path | None,
+    target: str,
+    plan: Plan,
+) -> None:
+    """Convert one cached month into the local sample tree.
+
+    Deliberately never downloads: the point of --sample is to inspect the real
+    output without paying for the catalogue. A month that is not cached is
+    reported and passed over rather than fetched.
+    """
+    if source is None:
+        plan.skipped.append((family_key, period))
+        print(f"  skip  {family_key}/{period}  (nao esta em cache)")
+        return
+
+    # Mirrors path_in_repo so the local tree matches what the Hub would hold.
+    local = Path(args.sample_dir) / target
+    if local.exists() and not args.force:
+        plan.skipped.append((family_key, period))
+        print(f"  skip  {local}  (ja gerado; use --force para refazer)")
+        return
+
+    frame = _reading.read_resource(
+        source, entry, columns=None, engine=XlsxEngine.OPENPYXL, dtype=ColumnDtype.STRING
+    )
+    local.parent.mkdir(parents=True, exist_ok=True)
+    _write_parquet(frame, local)
+    size = local.stat().st_size
+    plan.written_bytes += size
+    plan.uploads.append((family_key, period, "amostra"))
+    print(f"  gera  {local}  ({len(frame):,} linhas, {format_bytes(size)})")
+
+
 def _write_parquet(frame: pd.DataFrame, destination: Path) -> None:
     to_publishable(frame).to_parquet(destination, engine="pyarrow", compression=COMPRESSION, index=False)
 
@@ -328,6 +375,9 @@ def run(args: argparse.Namespace) -> int:
     if args.no_hub and args.push:
         print("erro: --no-hub e --push sao incompativeis (publicar exige ler o manifesto).", file=sys.stderr)
         return 2
+    if args.sample and args.push:
+        print("erro: --sample e --push sao incompativeis (--sample so escreve localmente).", file=sys.stderr)
+        return 2
 
     requested_periods = normalize_periodos(args.periodo)
     cache_root = _cache.get_cache_root(args.cache_dir)
@@ -335,7 +385,7 @@ def run(args: argparse.Namespace) -> int:
 
     api = None
     manifest = empty_manifest()
-    if not args.no_hub:
+    if not args.no_hub and not args.sample:
         from huggingface_hub import HfApi, get_token
 
         # get_token() consults HF_TOKEN, then HUGGING_FACE_HUB_TOKEN, then the
@@ -375,6 +425,11 @@ def run(args: argparse.Namespace) -> int:
 
                 target = path_in_repo(family_key, period)
                 source = _cached_source(entry, family_key, cache_root)
+
+                if args.sample:
+                    _sample_one(args, entry, family_key, period, source, target, plan)
+                    continue
+
                 if source is None and not args.push:
                     # Cannot know whether it changed without the bytes, and a
                     # dry run is not worth a multi-GB download.
@@ -453,13 +508,19 @@ def _finish(
     finally:
         staging.cleanup()
 
-    verb = "enviados" if args.push else "a enviar"
-    summary = f"\n{len(plan.uploads)} {verb}, {len(plan.skipped)} inalterados"
-    if plan.written_bytes:
-        summary += f", {format_bytes(plan.written_bytes)} em {batch.commits} commit(s)"
-    print(summary)
-    if not args.push and plan.uploads:
-        print("nada foi enviado (dry run). repita com --push para publicar.")
+    if args.sample:
+        summary = f"\n{len(plan.uploads)} gerados, {len(plan.skipped)} pulados"
+        if plan.written_bytes:
+            summary += f", {format_bytes(plan.written_bytes)} em {args.sample_dir}"
+        print(summary)
+    else:
+        verb = "enviados" if args.push else "a enviar"
+        summary = f"\n{len(plan.uploads)} {verb}, {len(plan.skipped)} inalterados"
+        if plan.written_bytes:
+            summary += f", {format_bytes(plan.written_bytes)} em {batch.commits} commit(s)"
+        print(summary)
+        if not args.push and plan.uploads:
+            print("nada foi enviado (dry run). repita com --push para publicar.")
 
     unmatched = sorted(set(requested_periods or []) - matched_periods)
     if unmatched:
@@ -527,6 +588,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--periodo",
         action="append",
         help="restringe a um mes AAAA-MM (repetivel; padrao: todos do catalogo)",
+    )
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="converte para parquet so o que ja esta em cache, gravando localmente e sem tocar no Hub",
+    )
+    parser.add_argument(
+        "--sample-dir",
+        default=str(DEFAULT_SAMPLE_DIR),
+        help=f"onde --sample grava os parquet (padrao: {DEFAULT_SAMPLE_DIR})",
     )
     parser.add_argument("--force", action="store_true", help="reenvia mesmo com o checksum inalterado")
     parser.add_argument("--force-refresh", action="store_true", help="ignora o cache do catalogo de periodos")
