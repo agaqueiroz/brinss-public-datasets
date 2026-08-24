@@ -248,8 +248,8 @@ def test_no_hub_with_push_is_rejected(capsys):
 
 def test_push_without_any_token_is_rejected(monkeypatch, capsys):
     # The gate used to read os.environ directly, so a user authenticated by
-    # `huggingface-cli login` -- token on disk, no env var -- was refused.
-    # get_token() covers both, which is why it is what gets stubbed here.
+    # `hf auth login` -- token on disk, no env var -- was refused. get_token()
+    # covers both, which is why it is what gets stubbed here.
     import huggingface_hub
 
     monkeypatch.setattr(huggingface_hub, "get_token", lambda: None)
@@ -258,7 +258,7 @@ def test_push_without_any_token_is_rejected(monkeypatch, capsys):
     assert code == 2
     err = capsys.readouterr().err
     assert "HF_TOKEN" in err
-    assert "huggingface-cli login" in err  # the disk-stored token is a valid source
+    assert "hf auth login" in err  # the disk-stored token is a valid source
 
 
 def _sample_args(tmp_path, *, force=False):

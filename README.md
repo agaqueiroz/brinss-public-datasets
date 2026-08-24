@@ -254,7 +254,7 @@ em outro lugar.
 
 **Dry run é o padrão.** Sem `--push` o script apenas lista o que subiria e o que
 seria pulado. Publicar exige um token de escrita, seja em `HF_TOKEN` seja
-guardado em disco por `huggingface-cli login`.
+guardado em disco por `hf auth login`.
 
 Flags úteis: `--familia` e `--periodo` (repetíveis) para restringir o escopo,
 `--limite N` para uma primeira carga parcial, `--force` para reenviar mesmo sem

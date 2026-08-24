@@ -38,6 +38,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "huggingface-hub" },
     { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -62,6 +63,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "huggingface-hub", specifier = ">=1.28" },
     { name = "pyarrow", specifier = ">=17.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
@@ -70,7 +72,7 @@ dev = [
     { name = "xlwt", specifier = ">=1.3.0" },
 ]
 publish = [
-    { name = "huggingface-hub", specifier = ">=0.28" },
+    { name = "huggingface-hub", specifier = ">=1.28" },
     { name = "pyarrow", specifier = ">=17.0" },
 ]
 
