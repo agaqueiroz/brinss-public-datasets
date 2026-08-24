@@ -34,7 +34,7 @@ the Hub, which makes it the cheap way to eyeball the real output: a full
 ``--push`` is 291 files and pulls tens of GB from the portal.
 
 Pushing needs a write token, either in ``HF_TOKEN`` or stored on disk by
-``huggingface-cli login``.
+``hf auth login``.
 """
 
 from __future__ import annotations
@@ -388,12 +388,14 @@ def run(args: argparse.Namespace) -> int:
     if not args.no_hub and not args.sample:
         from huggingface_hub import HfApi, get_token
 
-        # get_token() consults HF_TOKEN, then HUGGING_FACE_HUB_TOKEN, then the
-        # file written by `huggingface-cli login` -- reading the environment
-        # alone would reject a perfectly good CLI session.
+        # get_token() walks several sources: an OIDC exchange when
+        # HF_OIDC_RESOURCE is set (Trusted Publishers in CI), then HF_TOKEN,
+        # then HUGGING_FACE_HUB_TOKEN, then the token file written by
+        # `hf auth login`, then Colab secrets. Reading the environment alone
+        # would reject a perfectly good CLI session.
         if args.push and not get_token():
             print(
-                "erro: --push exige um token de escrita. Defina HF_TOKEN ou rode `huggingface-cli login`.",
+                "erro: --push exige um token de escrita. Defina HF_TOKEN ou rode `hf auth login`.",
                 file=sys.stderr,
             )
             return 2
