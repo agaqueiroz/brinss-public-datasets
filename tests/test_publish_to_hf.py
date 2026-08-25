@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import publish_to_hf as publish
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -390,6 +391,9 @@ def test_ensure_parquet_does_not_reopen_the_source_on_a_cache_hit(tmp_path, make
     def explode(*args, **kwargs):
         raise AssertionError("nao deveria reconverter")
 
+    # Both entry points, so this keeps proving something if the conversion is
+    # ever routed through the other one again.
+    monkeypatch.setattr(publish._reading, "open_resource_chunks", explode)
     monkeypatch.setattr(publish._reading, "read_resource", explode)
     _, _, reused = publish._ensure_parquet(_entry(), "perfil_unidades", "2024-06", source, digest, cache)
 
@@ -460,19 +464,73 @@ def test_a_deleted_parquet_is_not_reused(tmp_path, make_csv_bytes):
     assert cache.is_reusable("perfil_unidades", "2024-06", digest) is False
 
 
+def _frames(count: int, *, rows: int = 2) -> list[pd.DataFrame]:
+    return [
+        pd.DataFrame(
+            {
+                "periodo_referencia": [pd.Period("2024-06", freq="M")] * rows,
+                "codigo": [f"{index:05d}"] * rows,
+            }
+        )
+        for index in range(count)
+    ]
+
+
 def test_write_parquet_never_leaves_a_partial_file_under_the_final_name(tmp_path, monkeypatch):
-    # A crash inside to_parquet used to leave a truncated file sitting under the
-    # name the cache trusts.
+    # A crash mid-write used to leave a truncated file sitting under the name
+    # the cache trusts. Now that the write spans many row groups, the crash is
+    # forced on the second one -- the first has really been written by then.
     destination = tmp_path / "data" / "f" / "2024-06.parquet"
+    written = 0
+    original = pq.ParquetWriter.write_table
 
-    def explode(self, *args, **kwargs):
-        Path(args[0]).write_bytes(b"metade")  # pyarrow had started writing
-        raise OSError("disco cheio")
+    def explode(self, table, *args, **kwargs):
+        nonlocal written
+        written += 1
+        if written > 1:
+            raise OSError("disco cheio")
+        return original(self, table, *args, **kwargs)
 
-    monkeypatch.setattr(pd.DataFrame, "to_parquet", explode)
+    monkeypatch.setattr(pq.ParquetWriter, "write_table", explode)
 
     with pytest.raises(OSError, match="disco cheio"):
-        publish._write_parquet(pd.DataFrame({"x": ["a"]}), destination)
+        publish._write_parquet(iter(_frames(3)), destination)
+
+    assert written == 2  # it really got past the first row group
+    assert not destination.exists()
+    assert list(destination.parent.iterdir()) == []
+
+
+def test_write_parquet_writes_one_row_group_per_chunk(tmp_path):
+    # Proof the write is actually incremental: a frame concatenated first and
+    # written once would land as a single row group.
+    destination = tmp_path / "data" / "f" / "2024-06.parquet"
+
+    rows, columns = publish._write_parquet(iter(_frames(3)), destination)
+
+    assert (rows, columns) == (6, 2)
+    assert pq.ParquetFile(destination).num_row_groups == 3
+
+
+def test_write_parquet_matches_the_whole_frame(tmp_path):
+    destination = tmp_path / "data" / "f" / "2024-06.parquet"
+    chunks = _frames(3)
+
+    publish._write_parquet(iter(chunks), destination)
+
+    table = pq.read_table(destination)
+    assert table.column("codigo").to_pylist() == ["00000", "00000", "00001", "00001", "00002", "00002"]
+    # The period column goes out as text, on every chunk and not just the first.
+    assert table.column("periodo_referencia").to_pylist() == ["2024-06"] * 6
+
+
+def test_write_parquet_rejects_a_chunk_whose_schema_drifts(tmp_path):
+    destination = tmp_path / "data" / "f" / "2024-06.parquet"
+    first, second = _frames(2)
+    second = second.rename(columns={"codigo": "outra_coluna"})
+
+    with pytest.raises((ValueError, pa.ArrowInvalid, KeyError)):
+        publish._write_parquet(iter([first, second]), destination)
 
     assert not destination.exists()
     assert list(destination.parent.iterdir()) == []

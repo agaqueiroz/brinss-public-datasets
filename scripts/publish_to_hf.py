@@ -54,6 +54,7 @@ Pushing needs a write token, either in ``HF_TOKEN`` or stored on disk by
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import logging
@@ -61,11 +62,14 @@ import os
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from brinss.datasets import _cache, _catalog, _log, _reading
 from brinss.datasets._families import FAMILIES
@@ -331,21 +335,61 @@ def write_json_atomic(path: Path, payload: dict) -> None:
     os.replace(partial, path)
 
 
-def _write_parquet(frame: pd.DataFrame, destination: Path) -> None:
-    """Convert to Parquet via a .part file, so the final name is never truncated.
+def _write_parquet(chunks: Iterator[pd.DataFrame], destination: Path) -> tuple[int, int]:
+    """Write chunks to Parquet via a .part file, so the final name is never truncated.
 
-    A crash inside ``to_parquet`` would otherwise leave a partial file under the
-    name the cache trusts, and the next run would hand it to the Hub as a
-    finished month.
+    A crash mid-write would otherwise leave a partial file under the name the
+    cache trusts, and the next run would hand it to the Hub as a finished month.
+    That mattered when the whole month was written in one call; it matters more
+    now that the write spans hundreds of row groups and minutes.
+
+    Chunks are written as they arrive and dropped, which is the whole point:
+    the largest month is 25 GiB of CSV and 86 million rows, and holding it as
+    one frame is what used to raise ``MemoryError``. Each chunk becomes one row
+    group, which also serves whoever reads the result off the Hub.
+
+    The schema of the first chunk is pinned for the rest. Every column is read
+    as text, so the schema does not drift between chunks -- and if it ever does,
+    ``write_table`` raises rather than quietly writing an unreadable file.
+
+    Returns the row and column counts, since the caller no longer has a frame
+    to measure.
     """
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.name + ".part")
+    writer = None
+    rows = 0
+    columns = 0
+
     try:
-        to_publishable(frame).to_parquet(partial, engine="pyarrow", compression=COMPRESSION, index=False)
+        for chunk in chunks:
+            table = pa.Table.from_pandas(
+                to_publishable(chunk), schema=writer.schema if writer else None, preserve_index=False
+            )
+            if writer is None:
+                writer = pq.ParquetWriter(partial, table.schema, compression=COMPRESSION)
+                columns = table.num_columns
+            writer.write_table(table)
+            rows += table.num_rows
+        if writer is None:
+            # No chunks at all: pandas always yields at least one, even empty,
+            # so this means the reader gave up before the header.
+            raise ValueError(f"nenhum dado lido para {destination.name}")
+        writer.close()
+        writer = None
     except BaseException:
+        if writer is not None:
+            # Closing writes the footer, so it can fail too -- on a full disk it
+            # is the likeliest thing to. Letting that escape would replace the
+            # real cause and, worse, skip the unlink below, leaving behind the
+            # very .part this function exists to prevent.
+            with contextlib.suppress(Exception):
+                writer.close()
         partial.unlink(missing_ok=True)
         raise
+
     os.replace(partial, destination)
+    return rows, columns
 
 
 # --------------------------------------------------------------------------
@@ -434,6 +478,49 @@ def _load_build_index(path: Path) -> dict:
     return index
 
 
+def _convert_to_parquet(entry, source: Path, local: Path) -> tuple[int, int]:
+    """Stream one source file into one Parquet, returning its row/column counts.
+
+    The source is never held whole: ``open_resource_chunks`` yields it a piece
+    at a time and ``_write_parquet`` writes each piece straight out.
+
+    The loop exists for the encoding. The one sniffed from the leading sample
+    can be disproved much later in the file -- a CSV that opens with a megabyte
+    of plain ASCII and turns out to be cp1252 further down reads as UTF-8 right
+    up to its first accented byte. By then rows have already been written, so
+    unlike a whole-file read this cannot retry from the inside; the conversion
+    is restarted here with the next candidate instead. ``_write_parquet``
+    already deletes its ``.part`` on the way out, so each attempt starts clean.
+
+    In practice this runs once: the published CSVs carry an accent in the
+    header row, which settles the encoding in the first few bytes.
+    """
+    encodings = _reading.resource_encodings(source) or [None]
+
+    for position, encoding in enumerate(encodings):
+        try:
+            with _reading.open_resource_chunks(
+                source,
+                entry,
+                columns=None,
+                engine=XlsxEngine.OPENPYXL,
+                dtype=ColumnDtype.STRING,
+                encoding=encoding,
+            ) as chunks:
+                return _write_parquet(chunks, local)
+        except UnicodeDecodeError:
+            if position == len(encodings) - 1:
+                raise
+            LOGGER.warning(
+                "  encoding '%s' falhou alem da amostra em '%s'; refazendo com '%s'",
+                encoding,
+                source.name,
+                encodings[position + 1],
+            )
+
+    raise AssertionError("unreachable: the last candidate either returns or raises")
+
+
 def _ensure_parquet(
     entry,
     family_key: str,
@@ -456,21 +543,17 @@ def _ensure_parquet(
         return local, cache.entry(family_key, period), True
 
     started_at = time.perf_counter()
-    frame = _reading.read_resource(
-        source, entry, columns=None, engine=XlsxEngine.OPENPYXL, dtype=ColumnDtype.STRING
-    )
-    _write_parquet(frame, local)
+    rows, columns = _convert_to_parquet(entry, source, local)
     record = {
         "source_sha256": digest,
         "source_url": entry.url,
         "resource_id": entry.resource_id,
-        "rows": len(frame),
-        "columns": len(frame.columns),
+        "rows": rows,
+        "columns": columns,
         "parquet_bytes": local.stat().st_size,
         "conversion": CONVERSION_RECIPE,
         "built_at": _utcnow(),
     }
-    del frame
     # Parquet first, index second. The only inconsistency a crash can leave is
     # "file is there, index does not know", which costs one reconversion. The
     # other order leaves the index vouching for a file that may be truncated.

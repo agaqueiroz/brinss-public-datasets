@@ -6,7 +6,11 @@ import pandas as pd
 import pytest
 
 from brinss.datasets._catalog import ResourceEntry
-from brinss.datasets._reading import read_resource
+from brinss.datasets._reading import (
+    open_resource_chunks,
+    read_resource,
+    resource_encodings,
+)
 from brinss.datasets.enums import ColumnDtype, XlsxEngine
 from brinss.datasets.exceptions import ColumnNotFoundError, UnsupportedArchiveError
 
@@ -339,3 +343,151 @@ def test_read_resource_keeps_accents_in_a_csv_inside_a_zip(tmp_path, make_csv_zi
     df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
 
     assert df.loc[0, "especie"] == "BENEFÍCIO POR INCAPACIDADE"
+
+
+# --------------------------------------------------------------------------
+# streaming: open_resource_chunks
+# --------------------------------------------------------------------------
+
+
+def _all_chunks(path, **kwargs) -> list[pd.DataFrame]:
+    defaults = {"columns": None, "engine": XlsxEngine.OPENPYXL, "chunk_rows": 1}
+    defaults.update(kwargs)
+    with open_resource_chunks(path, _entry(), **defaults) as chunks:
+        return list(chunks)
+
+
+def test_chunks_concatenated_match_the_whole_frame(tmp_path, make_csv_bytes):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(ROWS))
+
+    combined = pd.concat(_all_chunks(path), ignore_index=True)
+
+    pd.testing.assert_frame_equal(combined, read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL))
+
+
+def test_chunking_really_splits_the_file(tmp_path, make_csv_bytes):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(ROWS))
+
+    assert len(_all_chunks(path)) == len(ROWS)
+
+
+def test_every_chunk_carries_the_period_column(tmp_path, make_csv_bytes):
+    # It used to be inserted once, after the whole frame was built; a chunk
+    # missing it would produce a Parquet with a drifting schema.
+    path = _write(tmp_path, "res.csv", make_csv_bytes(ROWS))
+
+    for chunk in _all_chunks(path):
+        assert chunk.columns[0] == "periodo_referencia"
+        assert (chunk["periodo_referencia"] == pd.Period("2024-06", freq="M")).all()
+
+
+def test_chunks_from_a_csv_inside_a_zip_keep_accents(tmp_path, make_csv_zip_bytes):
+    path = _write(tmp_path, "res.zip", make_csv_zip_bytes(ACCENTED_ROWS, member_name="dados.csv"))
+
+    combined = pd.concat(_all_chunks(path), ignore_index=True)
+
+    assert combined.loc[0, "especie"] == "BENEFÍCIO POR INCAPACIDADE"
+    assert combined.loc[1, "unidade"] == "AVALIAÇÃO SÃO PAULO"
+
+
+def test_excel_yields_a_single_chunk(tmp_path, make_xlsx_bytes):
+    path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS, banner="BENEFICIOS - JUNHO"))
+
+    chunks = _all_chunks(path)
+
+    assert len(chunks) == 1
+    assert list(chunks[0].columns) == ["periodo_referencia", "beneficio", "valor"]
+
+
+def test_a_zip_member_is_never_materialized(tmp_path, make_csv_zip_bytes, monkeypatch):
+    # Reading the member whole is exactly what raised MemoryError on the 25 GiB
+    # months, so the CSV path must not call ZipFile.read at all.
+    path = _write(tmp_path, "res.zip", make_csv_zip_bytes(ROWS, member_name="dados.csv"))
+
+    def explode(self, name, pwd=None):
+        raise AssertionError("nao deveria materializar o membro")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", explode)
+
+    assert len(_all_chunks(path)) == len(ROWS)
+
+
+def test_the_archive_is_closed_when_the_with_block_ends(tmp_path, make_csv_zip_bytes):
+    # On Windows an open descriptor makes unlink fail outright, so deleting the
+    # file is a real assertion about the handle rather than a proxy for one.
+    path = _write(tmp_path, "res.zip", make_csv_zip_bytes(ROWS, member_name="dados.csv"))
+
+    with open_resource_chunks(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL) as chunks:
+        list(chunks)
+
+    path.unlink()
+
+
+def test_the_archive_is_closed_when_the_caller_stops_early(tmp_path, make_csv_zip_bytes):
+    path = _write(tmp_path, "res.zip", make_csv_zip_bytes(ROWS, member_name="dados.csv"))
+
+    with open_resource_chunks(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL, chunk_rows=1) as chunks:
+        next(iter(chunks))  # abandon the rest
+
+    path.unlink()
+
+
+def test_the_archive_is_closed_when_the_caller_raises(tmp_path, make_csv_zip_bytes):
+    path = _write(tmp_path, "res.zip", make_csv_zip_bytes(ROWS, member_name="dados.csv"))
+
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        open_resource_chunks(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL) as chunks,
+    ):
+        next(iter(chunks))
+        raise RuntimeError("boom")
+
+    path.unlink()
+
+
+# --------------------------------------------------------------------------
+# encoding detection over a bounded sample
+# --------------------------------------------------------------------------
+
+
+def _ascii_padded_rows(count: int) -> list[dict]:
+    """Filler wide enough to push the accented rows past the 1 MB sample."""
+    return [{"unidade": f"UNIDADE {index:06d} " + "X" * 60, "especie": "APOSENTADORIA"} for index in range(count)]
+
+
+def test_a_cp1252_accent_past_the_sample_is_detected_not_mangled(tmp_path, make_csv_bytes):
+    # The sample sees nothing but ASCII, so utf-8 wins it -- and then the first
+    # accented byte breaks the read. What must never happen is the read
+    # succeeding with the accents silently mangled.
+    payload = make_csv_bytes(_ascii_padded_rows(20_000) + ACCENTED_ROWS, encoding="cp1252")
+    assert payload.index(b"\xca") > 1_000_000, "a fixture precisa passar de 1 MB antes do acento"
+    path = _write(tmp_path, "res.csv", payload)
+
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert df.iloc[-1]["unidade"] == "AVALIAÇÃO SÃO PAULO"
+    assert df.iloc[-2]["especie"] == "BENEFÍCIO POR INCAPACIDADE"
+
+
+def test_resource_encodings_offers_a_fallback_after_utf8(tmp_path, make_csv_bytes):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(_ascii_padded_rows(20_000), encoding="cp1252"))
+
+    assert resource_encodings(path)[:2] == ["utf-8-sig", "cp1252"]
+
+
+def test_resource_encodings_is_empty_for_a_spreadsheet(tmp_path, make_xlsx_bytes):
+    path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS))
+
+    assert resource_encodings(path) == []
+
+
+def test_a_sample_cut_mid_character_does_not_reject_utf8(tmp_path, make_csv_bytes):
+    # The 1 MB cut can land inside a multi-byte sequence. Counting that as a
+    # decoding failure would drop a genuinely UTF-8 file down to cp1252 and
+    # mangle every accent in it.
+    payload = make_csv_bytes(_ascii_padded_rows(20_000) + ACCENTED_ROWS, encoding="utf-8")
+    path = _write(tmp_path, "res.csv", payload)
+
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert df.iloc[-1]["unidade"] == "AVALIAÇÃO SÃO PAULO"
