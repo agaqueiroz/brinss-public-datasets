@@ -511,12 +511,38 @@ Hub) continua vendo a string legível.
       categorias por mês (ex: ativos/suspensos/cessados em "mantidos").
 - [ ] Implementar `brinss.ops`: funções de transformação/análise sobre os
       datasets carregados (hoje é só um namespace reservado, vazio).
+- [ ] Rodar os testes de rede (`pytest -m network`) periodicamente no CI, num
+      workflow agendado que abra issue ao falhar. Eles ficam fora do CI comum de
+      propósito — dependem do portal e do espelho estarem de pé, e um deles baixa
+      dados de verdade —, mas isso significa que hoje **nada avisa** quando o INSS
+      muda o layout de um arquivo ou quando as duas fontes deixam de concordar.
+- [ ] Automatizar a atualização do espelho no Hugging Face. Hoje
+      `scripts/publish_to_hf.py` é rodado à mão, então um mês novo no portal só
+      chega à fonte `hf` quando alguém lembra de rodá-lo — é a causa do atraso
+      descrito em [Fonte dos dados](#fonte-dos-dados).
+- [ ] Expor leitura em streaming na API pública. `open_resource_chunks` já existe
+      e é o que permite ao script de publicação converter arquivos de dezenas de
+      GB, mas quem chama `load_*` ainda recebe o mês inteiro de uma vez —
+      `periodo="all"` nas famílias pesadas continua limitado pela RAM.
+- [ ] Medir cobertura de testes: `pytest-cov` está no grupo `dev`, mas nenhum
+      comando o usa e não há mínimo configurado.
+- [ ] Refinar `dtype="infer"` na fonte `hf`. A conversão pós-leitura só tenta
+      número, então uma coluna que o `read_csv` inferiria como booleano ou data
+      fica como texto. Não afeta os datasets publicados hoje, mas é uma diferença
+      real entre as duas fontes.
+- [ ] Manter um CHANGELOG. As notas de release saem dos commits, o que serve para
+      acompanhar o desenvolvimento, mas não conta o que muda para quem apenas usa
+      a biblioteca.
 
 ## Desenvolvimento
 
 ```bash
 uv sync
 uv run pytest              # suíte completa (sem os testes que precisam de rede)
-uv run pytest -m network   # inclui um teste real contra o portal
+uv run pytest -m network   # inclui os testes que baixam dados de verdade
 uv run ruff check .
 ```
+
+Os testes marcados com `network` são desmarcados por padrão (`addopts` no
+`pyproject.toml`). São três: um download real de cada fonte e uma comparação do
+mesmo mês pelas duas, conferindo que entregam DataFrames idênticos.
