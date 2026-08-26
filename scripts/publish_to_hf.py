@@ -71,18 +71,25 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from brinss.datasets import _cache, _catalog, _log, _reading
+from brinss.datasets import _cache, _catalog, _hf, _log, _reading
 from brinss.datasets._families import FAMILIES
-from brinss.datasets.enums import ColumnDtype, XlsxEngine
+from brinss.datasets.enums import ColumnDtype, DataSource, XlsxEngine
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PARQUET_DIR = REPO_ROOT / "tmp"
 DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 
-DEFAULT_REPO_ID = "agaqueiroz/brinss-public-datasets"
-MANIFEST_PATH = "manifest.json"
-CARD_PATH = "README.md"
-MANIFEST_SCHEMA_VERSION = 1
+# The repo layout is shared with the library, which now reads this mirror as
+# its default source. It lives in brinss.datasets._hf so that the writer here
+# and the reader there cannot drift apart.
+DEFAULT_REPO_ID = _hf.REPO_ID
+MANIFEST_PATH = _hf.MANIFEST_PATH
+CARD_PATH = _hf.CARD_PATH
+MANIFEST_SCHEMA_VERSION = _hf.MANIFEST_SCHEMA_VERSION
+path_in_repo = _hf.path_in_repo
+parse_repo_path = _hf.parse_repo_path
+manifest_key = _hf.manifest_key
+
 PERIOD_COLUMN = "periodo_referencia"
 
 BUILD_INDEX_NAME = "build-index.json"
@@ -137,23 +144,6 @@ def sha256_file(path: Path) -> str:
         while chunk := handle.read(_HASH_CHUNK_BYTES):
             digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
-
-
-def path_in_repo(family_key: str, period: str) -> str:
-    return f"data/{family_key}/{period}.parquet"
-
-
-def parse_repo_path(path: str) -> tuple[str, str] | None:
-    """The inverse of ``path_in_repo``, or None for anything else in the repo."""
-    parts = path.split("/")
-    if len(parts) != 3 or parts[0] != "data" or not parts[2].endswith(".parquet"):
-        return None
-    family_key, period = parts[1], parts[2].removesuffix(".parquet")
-    return (family_key, period) if family_key in FAMILIES else None
-
-
-def manifest_key(family_key: str, period: str) -> str:
-    return f"{family_key}/{period}"
 
 
 def needs_upload(manifest: dict, family_key: str, period: str, source_sha256: str) -> tuple[bool, str]:
@@ -1097,7 +1087,13 @@ def run(args: argparse.Namespace) -> int:
     try:
         for family_key in family_keys:
             catalogs[family_key] = _catalog.build_catalog(
-                FAMILIES[family_key], cache_dir=cache_root, force_refresh=args.force_refresh
+                FAMILIES[family_key],
+                cache_dir=cache_root,
+                # This script is what fills the mirror, so it always reads the
+                # portal -- converting the mirror's own Parquet back to itself
+                # would publish a copy of a copy.
+                source=DataSource.INSS,
+                force_refresh=args.force_refresh,
             )
 
         orphans = _report_orphans(repo_files, manifest, family_keys, requested_periods)

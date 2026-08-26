@@ -70,6 +70,32 @@ def make_xlsx_bytes():
 
 
 @pytest.fixture
+def make_parquet_bytes():
+    def _make(rows: list[dict], *, period: str, columns: list[str] | None = None) -> bytes:
+        """Build a Parquet file shaped exactly like the ones on the mirror.
+
+        Which means: every value a string, and ``periodo_referencia`` first and
+        as text rather than as a pandas Period -- see ``publish_to_hf`` for why
+        it is written that way. ``columns`` overrides the column names, to
+        exercise the duplicates some families publish.
+        """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        names = columns if columns is not None else list(rows[0].keys())
+        arrays = [pa.array([str(row[key]) for row in rows], type=pa.string()) for key in rows[0]]
+        table = pa.table(
+            [pa.array([period] * len(rows), type=pa.string()), *arrays],
+            names=["periodo_referencia", *names],
+        )
+        buffer = io.BytesIO()
+        pq.write_table(table, buffer, compression="zstd")
+        return buffer.getvalue()
+
+    return _make
+
+
+@pytest.fixture
 def make_csv_bytes():
     def _make(rows: list[dict], *, delimiter: str = ";", encoding: str = "latin-1") -> bytes:
         headers = list(rows[0].keys())

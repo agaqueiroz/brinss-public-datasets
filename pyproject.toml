@@ -14,6 +14,8 @@ dependencies = [
     "pandas>=2.2",
     "platformdirs>=4.0",
     "pooch>=1.8",
+    # The default source is the Parquet mirror, so reading it is not optional.
+    "pyarrow>=17.0",
     "requests>=2.31",
     "xlrd>=2.0.2",
 ]
@@ -22,14 +24,12 @@ dependencies = [
 # Only the scripts under scripts/ need these; the library itself does not.
 publish = [
     "huggingface-hub>=1.28",
-    "pyarrow>=17.0",
 ]
 dev = [
     # huggingface-hub is needed here too: test_publish_to_hf.py stubs get_token()
     # to exercise the missing-token gate, and monkeypatching it means importing
     # the real module -- the script's lazy import does not spare the tests.
     "huggingface-hub>=1.28",
-    "pyarrow>=17.0",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "responses>=0.25",

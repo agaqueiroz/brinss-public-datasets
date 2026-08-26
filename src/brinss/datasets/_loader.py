@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 import time
+from enum import Enum
 
 import pandas as pd
 
 from . import _cache, _catalog, _log, _reading
 from ._families import FAMILIES, DatasetFamily
 from ._period import PeriodoLike
-from .enums import ColumnDtype, XlsxEngine
+from .enums import ColumnDtype, DataSource, XlsxEngine
 
 
 def _get_family(name: str) -> DatasetFamily:
@@ -19,13 +20,13 @@ def _get_family(name: str) -> DatasetFamily:
         raise KeyError(f"dataset desconhecido: {name!r}. Disponiveis: {available}.") from exc
 
 
-def _coerce_dtype(value: ColumnDtype | str) -> ColumnDtype:
-    """Validate ``dtype`` up front, before any (possibly multi-GB) download."""
+def _coerce[T: Enum](enum: type[T], value: T | str, *, label: str) -> T:
+    """Validate one enum-valued argument up front, before any (possibly multi-GB) download."""
     try:
-        return ColumnDtype(value)
+        return enum(value)
     except ValueError as exc:
-        accepted = ", ".join(repr(member.value) for member in ColumnDtype)
-        raise ValueError(f"dtype invalido: {value!r}. Aceitos: {accepted}.") from exc
+        accepted = ", ".join(repr(member.value) for member in enum)
+        raise ValueError(f"{label} invalido: {value!r}. Aceitos: {accepted}.") from exc
 
 
 def load_dataset(
@@ -35,6 +36,7 @@ def load_dataset(
     as_dict: bool = False,
     columns: list[str] | None = None,
     dtype: ColumnDtype | str = ColumnDtype.STRING,
+    source: DataSource | str = DataSource.HF,
     force_download: bool = False,
     force_refresh: bool = False,
     cache_dir: str | os.PathLike | None = None,
@@ -45,9 +47,12 @@ def load_dataset(
     See ``brinss.datasets`` module docs for the full parameter reference.
     """
     family = _get_family(name)
-    dtype = _coerce_dtype(dtype)
+    dtype = _coerce(ColumnDtype, dtype, label="dtype")
+    source = _coerce(DataSource, source, label="source")
     cache_root = _cache.get_cache_root(cache_dir)
-    catalog = _catalog.build_catalog(family, cache_dir=cache_root, force_refresh=force_refresh)
+    catalog = _catalog.build_catalog(
+        family, cache_dir=cache_root, source=source, force_refresh=force_refresh
+    )
     periods = _catalog.resolve_periods(catalog, periodo)
 
     frames: dict[str, pd.DataFrame] = {}
@@ -80,8 +85,17 @@ def list_datasets() -> list[str]:
     return sorted(FAMILIES)
 
 
-def list_periods(name: str, *, force_refresh: bool = False, cache_dir: str | os.PathLike | None = None) -> list[pd.Period]:
+def list_periods(
+    name: str,
+    *,
+    source: DataSource | str = DataSource.HF,
+    force_refresh: bool = False,
+    cache_dir: str | os.PathLike | None = None,
+) -> list[pd.Period]:
     family = _get_family(name)
+    source = _coerce(DataSource, source, label="source")
     cache_root = _cache.get_cache_root(cache_dir)
-    catalog = _catalog.build_catalog(family, cache_dir=cache_root, force_refresh=force_refresh)
+    catalog = _catalog.build_catalog(
+        family, cache_dir=cache_root, source=source, force_refresh=force_refresh
+    )
     return [entry.period for entry in catalog.entries]

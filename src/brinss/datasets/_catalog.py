@@ -4,12 +4,13 @@ import json
 import os
 import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
 
-from . import _ckan
+from . import _ckan, _hf
 from ._families import DatasetFamily
 from ._period import (
     PeriodoLike,
@@ -17,7 +18,13 @@ from ._period import (
     parse_periodo_from_name,
     parse_periodo_from_url,
 )
-from .exceptions import CkanUnavailableError, PeriodUnavailableError
+from .enums import DataSource
+from .exceptions import (
+    BrinssError,
+    CkanUnavailableError,
+    HuggingFaceUnavailableError,
+    PeriodUnavailableError,
+)
 
 DEFAULT_CATALOG_TTL_SECONDS = 86400
 
@@ -35,6 +42,7 @@ class ResourceEntry:
 @dataclass(frozen=True)
 class DatasetCatalog:
     family: DatasetFamily
+    source: DataSource
     entries: tuple[ResourceEntry, ...]  # sorted by period, ascending
 
     @property
@@ -80,27 +88,34 @@ def _write_cache(path: Path, result: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _get_package_show(
-    slug: str,
+def _get_metadata(
+    key: str,
+    fetch: Callable[[], dict],
     *,
+    unavailable: type[BrinssError],
+    stale_warning: str,
     cache_dir: Path,
     force_refresh: bool,
     ttl_seconds: int,
 ) -> dict:
-    path = _cache_path(cache_dir, slug)
+    """Fetch a source's metadata, or serve the cached copy while it is young enough.
+
+    A source being down does not have to end the call: a stale cache is handed
+    back with a warning, which is what keeps a notebook working through an
+    outage on either side. It only raises when there is nothing local to fall
+    back to.
+    """
+    path = _cache_path(cache_dir, key)
     cached = _read_cache(path)
 
     if not force_refresh and cached is not None and (time.time() - cached["fetched_at"]) < ttl_seconds:
         return cached["result"]
 
     try:
-        result = _ckan.package_show(slug)
-    except CkanUnavailableError:
+        result = fetch()
+    except unavailable:
         if cached is not None:
-            warnings.warn(
-                f"CKAN indisponivel; usando catalogo em cache (desatualizado) para '{slug}'.",
-                stacklevel=3,
-            )
+            warnings.warn(stale_warning, stacklevel=4)
             return cached["result"]
         raise
 
@@ -112,21 +127,40 @@ def build_catalog(
     family: DatasetFamily,
     *,
     cache_dir: Path,
+    source: DataSource | str,
     force_refresh: bool = False,
     ttl_seconds: int | None = None,
 ) -> DatasetCatalog:
-    """Fetch (or reuse the cached) CKAN metadata for a family and build its catalog.
+    """Discover which periods a family has available, from the chosen source.
 
-    Only package *slugs* are hardcoded (in ``_families.py``); the list of
-    resources -- and therefore of available periods -- is always discovered
-    live or from the local metadata cache, since the portal keeps appending
-    new monthly resources to the same package over time.
+    Nothing about the period list is hardcoded on either side -- only package
+    slugs (in ``_families.py``) and the mirror's path layout (in ``_hf.py``).
+    Both sources keep appending a month at a time, so the list is always
+    discovered live or from the local metadata cache.
     """
+    source = DataSource(source)
     resolved_ttl = ttl_seconds if ttl_seconds is not None else _default_ttl_seconds()
+    build = _build_from_manifest if source is DataSource.HF else _build_from_ckan
+    entries = build(family, cache_dir=cache_dir, force_refresh=force_refresh, ttl_seconds=resolved_ttl)
+    return DatasetCatalog(family=family, source=source, entries=entries)
+
+
+def _build_from_ckan(
+    family: DatasetFamily, *, cache_dir: Path, force_refresh: bool, ttl_seconds: int
+) -> tuple[ResourceEntry, ...]:
+    """Read the portal's CKAN metadata and turn its resources into entries."""
     entries: dict[pd.Period, ResourceEntry] = {}
 
     for slug in family.slugs:
-        package = _get_package_show(slug, cache_dir=cache_dir, force_refresh=force_refresh, ttl_seconds=resolved_ttl)
+        package = _get_metadata(
+            slug,
+            lambda slug=slug: _ckan.package_show(slug),
+            unavailable=CkanUnavailableError,
+            stale_warning=f"CKAN indisponivel; usando catalogo em cache (desatualizado) para '{slug}'.",
+            cache_dir=cache_dir,
+            force_refresh=force_refresh,
+            ttl_seconds=ttl_seconds,
+        )
         for resource in package.get("resources", []):
             name = resource.get("name", "")
             if not family.matches_resource(name):
@@ -155,8 +189,63 @@ def build_catalog(
                 format=resource.get("format", ""),
             )
 
-    sorted_entries = tuple(entries[period] for period in sorted(entries))
-    return DatasetCatalog(family=family, entries=sorted_entries)
+    return tuple(entries[period] for period in sorted(entries))
+
+
+def _build_from_manifest(
+    family: DatasetFamily, *, cache_dir: Path, force_refresh: bool, ttl_seconds: int
+) -> tuple[ResourceEntry, ...]:
+    """Read the Hugging Face mirror's manifest and turn its records into entries.
+
+    Much less work than the CKAN side, and not by accident: the manifest is
+    keyed by family and period, so there is no resource title to parse a month
+    out of, no filter separating three datasets that share one package, and no
+    two resources claiming the same month. Those questions were all settled
+    once, when the mirror was written.
+
+    The origin's CKAN resource id is carried into the entry so the Parquet
+    caches under a name derived from the source file it was built from: when
+    the portal replaces a month with a new resource, the mirror's copy of it
+    stops matching the cached name too.
+    """
+    manifest = _get_metadata(
+        "hf-manifest",
+        _hf.fetch_manifest,
+        unavailable=HuggingFaceUnavailableError,
+        stale_warning="Hugging Face indisponivel; usando catalogo em cache (desatualizado).",
+        cache_dir=cache_dir,
+        force_refresh=force_refresh,
+        ttl_seconds=ttl_seconds,
+    )
+
+    prefix = f"{family.key}/"
+    entries: list[ResourceEntry] = []
+    for key, record in manifest.get("entries", {}).items():
+        if not key.startswith(prefix):
+            continue
+        period_name = key[len(prefix) :]
+        try:
+            period = pd.Period(period_name, freq="M")
+        except ValueError:
+            warnings.warn(
+                f"entrada '{key}' do manifesto do Hugging Face nao tem periodo reconhecivel, ignorada.",
+                stacklevel=2,
+            )
+            continue
+
+        entries.append(
+            ResourceEntry(
+                period=period,
+                url=_hf.resolve_url(_hf.path_in_repo(family.key, period_name)),
+                resource_id=record.get("resource_id") or "hf",
+                # No extension here: _cache._resource_filename takes it from the URL.
+                resource_name=f"{family.key}-{period_name}",
+                package_slug=_hf.REPO_ID,
+                format="PARQUET",
+            )
+        )
+
+    return tuple(sorted(entries, key=lambda entry: entry.period))
 
 
 def _resolve_period_collision(
@@ -197,10 +286,25 @@ def _resolve_period_collision(
     return period
 
 
+def _other_source_hint(catalog: DatasetCatalog) -> str:
+    """A nudge towards the portal when the mirror simply has not caught up yet.
+
+    The mirror is rebuilt from the portal, so it trails it by up to one
+    publication cycle. A month missing from ``hf`` but present on ``inss`` is
+    the ordinary state of the first days of a month, not a defect.
+    """
+    if catalog.source is DataSource.HF:
+        return f" A fonte '{DataSource.INSS.value}' pode ter meses mais recentes."
+    return ""
+
+
 def resolve_periods(catalog: DatasetCatalog, periodo: PeriodoLike) -> list[pd.Period]:
     """Turn a user-supplied ``periodo`` into the concrete, available periods to load."""
     if not catalog.entries:
-        raise PeriodUnavailableError(f"nenhum periodo disponivel para o dataset '{catalog.family.key}'.")
+        raise PeriodUnavailableError(
+            f"nenhum periodo disponivel para o dataset '{catalog.family.key}' "
+            f"na fonte '{catalog.source.value}'.{_other_source_hint(catalog)}"
+        )
 
     normalized = normalize_periodo(periodo)
     available = catalog.entries_by_period
@@ -214,8 +318,10 @@ def resolve_periods(catalog: DatasetCatalog, periodo: PeriodoLike) -> list[pd.Pe
     if isinstance(normalized, pd.Period):
         if normalized not in available:
             raise PeriodUnavailableError(
-                f"periodo {normalized} indisponivel para '{catalog.family.key}'. "
+                f"periodo {normalized} indisponivel para '{catalog.family.key}' "
+                f"na fonte '{catalog.source.value}'. "
                 f"Intervalo disponivel: {catalog.min_period} a {catalog.max_period}."
+                f"{_other_source_hint(catalog)}"
             )
         return [normalized]
 
@@ -235,12 +341,15 @@ def resolve_periods(catalog: DatasetCatalog, periodo: PeriodoLike) -> list[pd.Pe
 def _warn_or_raise_gaps(catalog: DatasetCatalog, requested: list[pd.Period], resolved: list[pd.Period]) -> None:
     if not resolved:
         raise PeriodUnavailableError(
-            f"nenhum dos periodos solicitados esta disponivel para '{catalog.family.key}': {requested}. "
+            f"nenhum dos periodos solicitados esta disponivel para '{catalog.family.key}' "
+            f"na fonte '{catalog.source.value}': {requested}. "
             f"Intervalo disponivel: {catalog.min_period} a {catalog.max_period}."
+            f"{_other_source_hint(catalog)}"
         )
     missing = [period for period in requested if period not in resolved]
     if missing:
         warnings.warn(
-            f"periodos indisponiveis para '{catalog.family.key}', ignorados: {missing}.",
+            f"periodos indisponiveis para '{catalog.family.key}' na fonte "
+            f"'{catalog.source.value}', ignorados: {missing}.{_other_source_hint(catalog)}",
             stacklevel=3,
         )

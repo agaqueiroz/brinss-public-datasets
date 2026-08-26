@@ -19,6 +19,8 @@ from .enums import ColumnDtype, XlsxEngine
 from .exceptions import ColumnNotFoundError, UnsupportedArchiveError
 
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2/Compound File signature (legacy .xls)
+_PARQUET_MAGIC = b"PAR1"  # opens and closes every Parquet file
+_PERIOD_COLUMN = "periodo_referencia"
 _SAMPLE_SIZE = 65536
 _ENCODING_SAMPLE_SIZE = 1_000_000
 _CHUNK_ROWS = 500_000
@@ -50,6 +52,13 @@ class _ExcelSource:
     engine_name: str
 
 
+@dataclass(frozen=True)
+class _ParquetSource:
+    """A Parquet file from the Hugging Face mirror, read whole but column by column."""
+
+    source: Path
+
+
 def read_resource(
     path: Path,
     entry: ResourceEntry,
@@ -60,11 +69,13 @@ def read_resource(
 ) -> pd.DataFrame:
     """Read one downloaded resource into a DataFrame, sniffing its real content.
 
-    The CKAN portal's ``format`` field is not trustworthy: resources labeled
-    "CSV" are often actually a ZIP wrapping a single CSV member, and some
-    resources labeled "XLS"/"XLSX" are legacy OLE2 binaries that ``openpyxl``
-    cannot open. The downloaded bytes are inspected instead of trusting that
-    metadata.
+    Nothing here asks which source the file came from, and neither does the
+    caller have to say: a Parquet from the Hugging Face mirror and an XLSX
+    from the portal are told apart by their first bytes, like every other
+    format. That is also the only honest option on the portal side, where the
+    CKAN ``format`` field is not trustworthy: resources labeled "CSV" are
+    often actually a ZIP wrapping a single CSV member, and some labeled
+    "XLS"/"XLSX" are legacy OLE2 binaries that ``openpyxl`` cannot open.
 
     The spreadsheets are not laid out predictably either: the "beneficios"
     ones open with a one-cell banner row above the real column names, so the
@@ -74,7 +85,10 @@ def read_resource(
     ``dtype`` picks between reading every column as ``str`` (the default,
     faithful to the published text) and letting pandas infer types. Either
     way the ``periodo_referencia`` column added below stays a ``pd.Period``:
-    it is the library's own metadata, not a column of the file.
+    it is the library's own metadata, not a column of the file. The mirror
+    stores it as text and it is dropped in ``_read_parquet``, so that both
+    sources hand back exactly the same column, of the same type, in the same
+    position.
 
     The whole file lands in one DataFrame, so this is for resources that fit
     in memory. The published "beneficios_mantidos_*" and "beneficios_emitidos"
@@ -88,18 +102,16 @@ def read_resource(
 
     try:
         with _open_source(path, engine=engine) as source:
-            if isinstance(source, _ExcelSource):
-                frame = _read_excel(
-                    source.source, columns=columns, engine_name=source.engine_name, dtype=dtype
-                )
-            else:
+            if isinstance(source, _CsvSource):
                 frame = _read_csv_stream(source.open_stream, columns=columns, dtype=dtype)
+            else:
+                frame = _read_whole(source, columns=columns, dtype=dtype)
     except ColumnNotFoundError as exc:
         raise ColumnNotFoundError(
             f"coluna solicitada nao encontrada no recurso '{entry.resource_name}' ({entry.period}): {exc}"
         ) from exc
 
-    frame.insert(0, "periodo_referencia", entry.period)
+    frame.insert(0, _PERIOD_COLUMN, entry.period)
 
     logger.info(
         "DataFrame loaded: %s rows x %s columns from '%s' in %s.",
@@ -146,21 +158,23 @@ def open_resource_chunks(
     caller that has to restart a conversion after the first choice was
     disproved mid-read; see ``resource_encodings``.
 
-    An Excel resource yields exactly one chunk, so a caller written against
+    A resource that pandas can only read whole -- a spreadsheet, or a Parquet
+    from the mirror -- yields exactly one chunk, so a caller written against
     this needs only the one code path.
     """
     dtype = ColumnDtype(dtype)
     logger = _log.get_logger()
 
     with _open_source(path, engine=engine) as source:
-        if isinstance(source, _ExcelSource):
+        if not isinstance(source, _CsvSource):
             logger.info(
-                "Reading '%s' (%s) as a single chunk (spreadsheet)...",
+                "Reading '%s' (%s) as a single chunk (%s)...",
                 path.name,
                 _log.format_bytes(path.stat().st_size),
+                "parquet" if isinstance(source, _ParquetSource) else "spreadsheet",
             )
-            frame = _read_excel(source.source, columns=columns, engine_name=source.engine_name, dtype=dtype)
-            frame.insert(0, "periodo_referencia", entry.period)
+            frame = _read_whole(source, columns=columns, dtype=dtype)
+            frame.insert(0, _PERIOD_COLUMN, entry.period)
             yield iter((frame,))
             return
 
@@ -202,14 +216,22 @@ def resource_encodings(path: Path) -> list[str]:
     for why a wrong guess always raises instead of mangling accents.
     """
     with _open_source(path, engine=XlsxEngine.OPENPYXL) as source:
-        if isinstance(source, _ExcelSource):
+        if not isinstance(source, _CsvSource):
             return []
         return _encoding_candidates(*_read_sample(source.open_stream))
 
 
 @contextlib.contextmanager
-def _open_source(path: Path, *, engine: XlsxEngine) -> Generator[_CsvSource | _ExcelSource]:
+def _open_source(
+    path: Path, *, engine: XlsxEngine
+) -> Generator[_CsvSource | _ExcelSource | _ParquetSource]:
     """Resolve what ``path`` actually holds, keeping any archive open meanwhile."""
+    if _starts_with(path, _PARQUET_MAGIC):
+        # Checked first, and cheaply: Parquet carries its own encoding and
+        # column names, so none of the sniffing below has anything to add.
+        yield _ParquetSource(path)
+        return
+
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             names = [name for name in archive.namelist() if not name.endswith("/")]
@@ -234,16 +256,16 @@ def _open_source(path: Path, *, engine: XlsxEngine) -> Generator[_CsvSource | _E
                 yield _CsvSource(lambda: archive.open(member))
             return
 
-    if _looks_like_legacy_xls(path):
+    if _starts_with(path, _XLS_MAGIC):
         yield _ExcelSource(path, "xlrd")
         return
 
     yield _CsvSource(lambda: path.open("rb"))
 
 
-def _looks_like_legacy_xls(path: Path) -> bool:
+def _starts_with(path: Path, magic: bytes) -> bool:
     with path.open("rb") as handle:
-        return handle.read(len(_XLS_MAGIC)) == _XLS_MAGIC
+        return handle.read(len(magic)) == magic
 
 
 def _member_stem(name: str) -> str:
@@ -327,6 +349,68 @@ def _excel_header_row(source: Path | io.BytesIO, *, engine_name: str) -> int:
         if preview.iloc[index].notna().sum() > 1:
             return index
     return 0
+
+
+def _read_whole(
+    source: _ExcelSource | _ParquetSource, *, columns: list[str] | None, dtype: ColumnDtype
+) -> pd.DataFrame:
+    """Read a source pandas cannot stream, whichever of the two it is."""
+    if isinstance(source, _ParquetSource):
+        return _read_parquet(source.source, columns=columns, dtype=dtype)
+    return _read_excel(source.source, columns=columns, engine_name=source.engine_name, dtype=dtype)
+
+
+def _read_parquet(path: Path, *, columns: list[str] | None, dtype: ColumnDtype) -> pd.DataFrame:
+    """Read one Parquet file from the Hugging Face mirror.
+
+    ``columns`` goes to the reader rather than being applied to the result,
+    and that is the one place where the mirror beats the portal by more than
+    a constant factor: a column nobody asked for is never decompressed, and on
+    the wide families that is most of the file.
+
+    The mirror stores ``periodo_referencia`` as a "YYYY-MM" string -- Parquet
+    would otherwise carry the pandas Period as an extension type over the
+    month's ordinal (2024-06 becomes 653), which every reader that is not
+    pandas would show as that integer. It is dropped here so ``read_resource``
+    can insert the real ``pd.Period`` back, exactly as it does for the portal.
+    """
+    try:
+        frame = pd.read_parquet(path, columns=columns)
+    except (ValueError, KeyError) as exc:
+        # pyarrow reports a missing column as ArrowInvalid, a ValueError.
+        if columns is not None:
+            raise ColumnNotFoundError(str(exc)) from exc
+        raise
+
+    frame = frame.drop(columns=[_PERIOD_COLUMN], errors="ignore")
+    return _infer_types(frame) if dtype is ColumnDtype.INFER else frame
+
+
+def _infer_types(frame: pd.DataFrame) -> pd.DataFrame:
+    """Approximate ``read_csv``'s inference over columns that were read as text.
+
+    The mirror's files are text end to end -- that is the whole point of the
+    default dtype -- so ``dtype="infer"`` has nothing to hook into while
+    reading, the way it does on a CSV. Each column is converted afterwards
+    instead, and one that does not convert whole stays as it is.
+
+    On these datasets, whose columns are either numbers or free text, that
+    lands on the same result as the portal path. It also drops the leading
+    zeros of CID/CBO/CNAE just like reading the CSV with inference would --
+    that loss is what ``dtype="infer"`` means; see ``ColumnDtype``.
+
+    Columns are addressed by position, not by name: several families publish
+    duplicate column names in code/description pairs, which pandas hands back
+    as ``APS`` and ``APS.1`` from a CSV but which arrive from Parquet exactly
+    as the source spelled them.
+    """
+    frame = frame.copy()
+    for position in range(len(frame.columns)):
+        try:
+            frame.isetitem(position, pd.to_numeric(frame.iloc[:, position]))
+        except (ValueError, TypeError):
+            continue  # genuinely text, and it stays text
+    return frame
 
 
 def _read_excel(
@@ -418,7 +502,7 @@ def _iter_csv_chunks(
                 handle, sep=delimiter, encoding=encodings[0], chunksize=chunk_rows, **read_kwargs
             )
             for chunk in reader:
-                chunk.insert(0, "periodo_referencia", entry.period)
+                chunk.insert(0, _PERIOD_COLUMN, entry.period)
                 yield chunk
         except UnicodeDecodeError:
             # Let it out untouched, ahead of the ValueError clause below: the

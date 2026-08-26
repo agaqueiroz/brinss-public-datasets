@@ -54,5 +54,19 @@ def test_load_wrappers_forward_dtype_to_load_dataset(monkeypatch):
     assert captured["dtype"] is ds.ColumnDtype.INFER
 
 
+def test_load_wrappers_forward_source_to_load_dataset(monkeypatch):
+    # Same contract as dtype above: source rides in on **kwargs.
+    captured = {}
+
+    def fake_load_dataset(name, periodo=None, **kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(ds, "load_dataset", fake_load_dataset)
+    ds.load_beneficios_concedidos(source=ds.DataSource.INSS)
+
+    assert captured["source"] is ds.DataSource.INSS
+
+
 def test_get_cache_dir_returns_a_path(tmp_path):
     assert ds.get_cache_dir(tmp_path) == tmp_path

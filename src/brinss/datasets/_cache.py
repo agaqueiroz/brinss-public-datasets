@@ -9,7 +9,7 @@ from pathlib import Path
 import platformdirs
 import pooch
 
-from . import _ckan, _log
+from . import _log
 from ._catalog import ResourceEntry
 
 APP_NAME = "brinss"
@@ -71,6 +71,11 @@ def fetch_resource(
     then on pooch verifies that hash on every fetch, which also means it
     will transparently re-download if the government ever replaces a file's
     contents at the same URL without renaming it.
+
+    Both sources come through here unchanged. Their file names never collide:
+    the entry the mirror produces is named after its family and period and
+    ends in ``.parquet``, so a month held under both sources is two files in
+    the same directory, each with its own line in the registry.
     """
     cache_root = get_cache_root(cache_dir)
     files_dir = cache_root / "files" / family_key
@@ -89,9 +94,12 @@ def fetch_resource(
         _save_registry(cache_root, registry)
         known_hash = None
 
+    # base_url is empty because every resource carries an absolute URL of its
+    # own -- from the portal's S3 bucket or from the Hugging Face mirror --
+    # and pooch only falls back to base_url for files missing from ``urls``.
     fetcher = pooch.create(
         path=files_dir,
-        base_url=f"{_ckan.BASE_URL}/",
+        base_url="",
         registry={filename: known_hash},
         urls={filename: entry.url},
     )

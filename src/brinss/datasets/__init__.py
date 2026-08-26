@@ -16,6 +16,30 @@ Exemplo::
 Por padrão todas as colunas vêm como texto (``str``), preservando zeros à
 esquerda em códigos como CID, CBO, CNAE e código IBGE. Para deixar o pandas
 inferir os tipos, passe ``dtype="infer"``.
+
+Fonte dos dados
+---------------
+
+``source`` escolhe de onde os arquivos são baixados::
+
+    df = load_beneficios_concedidos(periodo="2024-06")                    # "hf" (padrão)
+    df = load_beneficios_concedidos(periodo="2024-06", source="inss")     # portal do INSS
+
+``"hf"`` usa o espelho em Parquet publicado em
+https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets, gerado por
+este mesmo repositório a partir dos arquivos do portal. É o padrão porque é a
+mesma tabela por uma fração do custo: bem menos bytes baixados, leitura em
+segundos em vez dos minutos que o ``openpyxl`` leva numa planilha grande, e
+``columns=[...]`` aplicado dentro do próprio arquivo — as colunas não pedidas
+nem chegam a ser descompactadas.
+
+``"inss"`` vai direto a https://dadosabertos.inss.gov.br. É a fonte de
+referência, e a que serve quando um mês acabou de ser publicado lá e ainda não
+chegou ao espelho, ou quando se quer auditar o espelho contra a origem.
+
+Os dois caminhos entregam o mesmo DataFrame: mesmos nomes de coluna, mesma
+coluna ``periodo_referencia`` como ``pandas.Period``, mesmo ``dtype="str"`` por
+padrão.
 """
 
 from __future__ import annotations
@@ -28,13 +52,15 @@ import pandas as pd
 from . import _cache
 from ._loader import list_datasets, list_periods, load_dataset
 from ._period import PeriodoLike
-from .enums import ColumnDtype, XlsxEngine
+from .enums import ColumnDtype, DataSource, XlsxEngine
 from .exceptions import (
     BrinssError,
     CkanUnavailableError,
     ColumnNotFoundError,
+    HuggingFaceUnavailableError,
     PeriodError,
     PeriodUnavailableError,
+    UnsupportedArchiveError,
 )
 
 __all__ = [
@@ -42,9 +68,12 @@ __all__ = [
     "CkanUnavailableError",
     "ColumnDtype",
     "ColumnNotFoundError",
+    "DataSource",
+    "HuggingFaceUnavailableError",
     "PeriodError",
     "PeriodUnavailableError",
     "PeriodoLike",
+    "UnsupportedArchiveError",
     "XlsxEngine",
     "get_cache_dir",
     "list_datasets",

@@ -6,6 +6,7 @@ import responses
 from responses import matchers
 
 from brinss.datasets import _ckan, _loader
+from brinss.datasets.enums import DataSource
 from brinss.datasets.exceptions import ColumnNotFoundError, PeriodUnavailableError
 
 SLUG = "beneficios-concedidos-plano-de-dados-abertos-jun-2023-a-jun-2025"
@@ -44,7 +45,7 @@ def test_load_dataset_default_returns_only_latest_period(cache_dir, make_xlsx_by
     )
     # deliberately no mock for the maio-2024 URL: if the loader fetched it, the test would fail
 
-    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir)
+    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir, source=DataSource.INSS)
 
     assert list(df["periodo_referencia"]) == [pd.Period("2024-06", freq="M")]
     assert df.loc[0, "beneficio"] == "aposentadoria"
@@ -67,12 +68,18 @@ def test_load_dataset_range_concatenates_and_as_dict(cache_dir, make_xlsx_bytes)
         status=200,
     )
 
-    df = _loader.load_dataset("beneficios_concedidos", periodo=("2024-05", "2024-06"), cache_dir=cache_dir)
+    df = _loader.load_dataset(
+        "beneficios_concedidos", periodo=("2024-05", "2024-06"), cache_dir=cache_dir, source=DataSource.INSS
+    )
     assert len(df) == 2
     assert set(df["periodo_referencia"]) == {pd.Period("2024-05", freq="M"), pd.Period("2024-06", freq="M")}
 
     result = _loader.load_dataset(
-        "beneficios_concedidos", periodo=("2024-05", "2024-06"), as_dict=True, cache_dir=cache_dir
+        "beneficios_concedidos",
+        periodo=("2024-05", "2024-06"),
+        as_dict=True,
+        cache_dir=cache_dir,
+        source=DataSource.INSS,
     )
     assert set(result) == {"2024-05", "2024-06"}
     assert isinstance(result["2024-06"], pd.DataFrame)
@@ -98,7 +105,7 @@ def test_load_dataset_handles_csv_labeled_resource_that_is_actually_a_zip(cache_
         status=200,
     )
 
-    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir)
+    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir, source=DataSource.INSS)
 
     assert df.loc[0, "beneficio"] == "aposentadoria"
     assert list(df["periodo_referencia"]) == [pd.Period("2024-06", freq="M")]
@@ -118,7 +125,9 @@ def test_load_dataset_missing_column_raises(cache_dir, make_xlsx_bytes):
     )
 
     with pytest.raises(ColumnNotFoundError):
-        _loader.load_dataset("beneficios_concedidos", columns=["coluna_inexistente"], cache_dir=cache_dir)
+        _loader.load_dataset(
+            "beneficios_concedidos", columns=["coluna_inexistente"], cache_dir=cache_dir, source=DataSource.INSS
+        )
 
 
 @responses.activate
@@ -129,12 +138,12 @@ def test_load_dataset_unavailable_period_raises(cache_dir):
     _mock_package_show(resources)
 
     with pytest.raises(PeriodUnavailableError):
-        _loader.load_dataset("beneficios_concedidos", periodo="2020-01", cache_dir=cache_dir)
+        _loader.load_dataset("beneficios_concedidos", periodo="2020-01", cache_dir=cache_dir, source=DataSource.INSS)
 
 
 def test_load_dataset_unknown_family_raises_key_error(cache_dir):
     with pytest.raises(KeyError):
-        _loader.load_dataset("familia-inexistente", cache_dir=cache_dir)
+        _loader.load_dataset("familia-inexistente", cache_dir=cache_dir, source=DataSource.INSS)
 
 
 @responses.activate
@@ -150,7 +159,7 @@ def test_load_dataset_defaults_to_string_columns(cache_dir, make_xlsx_bytes):
         status=200,
     )
 
-    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir)
+    df = _loader.load_dataset("beneficios_concedidos", cache_dir=cache_dir, source=DataSource.INSS)
 
     assert df.loc[0, "valor"] == "1500"
 
@@ -168,7 +177,7 @@ def test_load_dataset_dtype_infer_reaches_the_reader(cache_dir, make_xlsx_bytes)
         status=200,
     )
 
-    df = _loader.load_dataset("beneficios_concedidos", dtype="infer", cache_dir=cache_dir)
+    df = _loader.load_dataset("beneficios_concedidos", dtype="infer", cache_dir=cache_dir, source=DataSource.INSS)
 
     assert df.loc[0, "valor"] == 1500
 
@@ -177,4 +186,4 @@ def test_load_dataset_invalid_dtype_raises_before_downloading(cache_dir):
     # No responses are registered: reaching the network at all would error
     # differently, which is the point -- the check happens up front.
     with pytest.raises(ValueError, match="dtype invalido"):
-        _loader.load_dataset("beneficios_concedidos", dtype="texto", cache_dir=cache_dir)
+        _loader.load_dataset("beneficios_concedidos", dtype="texto", cache_dir=cache_dir, source=DataSource.INSS)
