@@ -9,6 +9,22 @@ authors = [
     { name = "André Galindo Alves de Queiroz" }
 ]
 requires-python = ">=3.12"
+keywords = ["inss", "dados-abertos", "open-data", "previdencia-social", "brasil", "pandas"]
+# No "License :: OSI Approved :: MIT License" here on purpose: the license is
+# already declared above as an SPDX expression, and PyPI rejects a package that
+# carries both that and a license classifier.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Portuguese (Brazilian)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "openpyxl>=3.1",
     "pandas>=2.2",
@@ -19,6 +35,12 @@ dependencies = [
     "requests>=2.31",
     "xlrd>=2.0.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/agaqueiroz/brinss-public-datasets"
+Repository = "https://github.com/agaqueiroz/brinss-public-datasets"
+Issues = "https://github.com/agaqueiroz/brinss-public-datasets/issues"
+"Dataset no Hugging Face" = "https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets"
 
 [dependency-groups]
 # Only the scripts under scripts/ need these; the library itself does not.

@@ -1,5 +1,9 @@
 # brinss-public-datasets
 
+[![PyPI](https://img.shields.io/pypi/v/brinss-public-datasets)](https://pypi.org/project/brinss-public-datasets/)
+[![Python](https://img.shields.io/pypi/pyversions/brinss-public-datasets)](https://pypi.org/project/brinss-public-datasets/)
+[![CI](https://github.com/agaqueiroz/brinss-public-datasets/actions/workflows/ci.yml/badge.svg)](https://github.com/agaqueiroz/brinss-public-datasets/actions/workflows/ci.yml)
+
 Carregamento (com download e cache automáticos) dos datasets abertos do INSS
 publicados em [dadosabertos.inss.gov.br](https://dadosabertos.inss.gov.br),
 no estilo `load_iris()` do scikit-learn.
@@ -11,8 +15,16 @@ leve. Veja [Fonte dos dados](#fonte-dos-dados).
 ## Instalação
 
 ```bash
+pip install brinss-public-datasets
+```
+
+Ou, com [uv](https://docs.astral.sh/uv/):
+
+```bash
 uv add brinss-public-datasets
 ```
+
+Requer Python 3.12 ou mais novo.
 
 ## Uso
 
@@ -546,3 +558,63 @@ uv run ruff check .
 Os testes marcados com `network` são desmarcados por padrão (`addopts` no
 `pyproject.toml`). São três: um download real de cada fonte e uma comparação do
 mesmo mês pelas duas, conferindo que entregam DataFrames idênticos.
+
+## Publicar uma versão
+
+A publicação é automatizada, mas o gatilho é sempre humano: uma tag `vX.Y.Z`
+constrói e abre a release **em rascunho**; publicar esse rascunho é o que envia
+o pacote ao PyPI.
+
+```bash
+# 1. bumpar a versão em pyproject.toml, commitar e enviar
+git commit -am "Versao 0.2.0" && git push
+
+# 2. taguear e enviar a tag
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+A tag dispara [`release.yml`](.github/workflows/release.yml), que confere que a
+tag bate com a versão do `pyproject.toml`, roda ruff e a suíte de testes,
+constrói sdist e wheel, valida os metadados com `twine check --strict` e cria a
+release em rascunho com os dois arquivos anexados.
+
+**3.** Revise as notas geradas em
+[Releases](https://github.com/agaqueiroz/brinss-public-datasets/releases) e
+clique em *Publish release*. Isso dispara
+[`publish-pypi.yml`](.github/workflows/publish-pypi.yml), que baixa os arquivos
+anexados à release — os mesmos, byte a byte — e os envia ao PyPI.
+
+O rascunho existe por um motivo específico: **o PyPI nunca aceita reenviar uma
+versão já publicada.** Se `0.2.0` subir quebrada, o conserto é queimar um
+`0.2.1`. O passo manual é a última chance de olhar antes disso.
+
+### Autenticação
+
+Por [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC): não
+há token guardado no repositório. O PyPI confia neste repositório, neste arquivo
+de workflow e neste environment, cadastrados em
+[pypi.org/manage/account/publishing](https://pypi.org/manage/account/publishing/):
+
+| Campo | Valor |
+| --- | --- |
+| PyPI Project Name | `brinss-public-datasets` |
+| Owner | `agaqueiroz` |
+| Repository name | `brinss-public-datasets` |
+| Workflow name | `publish-pypi.yml` |
+| Environment name | `pypi` |
+
+Os quatro valores precisam bater exatamente — **renomear
+`.github/workflows/publish-pypi.yml` quebra a publicação** até o cadastro ser
+atualizado. Do lado do GitHub, existe um environment chamado `pypi` em
+Settings → Environments; é onde se coloca uma aprovação manual extra, se
+desejado.
+
+### Integração contínua
+
+[`ci.yml`](.github/workflows/ci.yml) roda a cada push no `master` e em todo pull
+request: ruff e a suíte de testes em Linux e Windows, Python 3.12 e 3.13. O
+Windows não está ali por simetria — a biblioteca sanitiza nomes de arquivo,
+adivinha encoding e controla na mão o tempo de vida dos handles de ZIP.
+
+Os testes de rede continuam fora, ali e no release (veja
+[To-do](#to-do)).

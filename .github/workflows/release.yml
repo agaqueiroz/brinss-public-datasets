@@ -1,0 +1,99 @@
+name: Release
+
+# Uma tag vX.Y.Z constroi os artefatos e abre a release como RASCUNHO.
+# Publicar esse rascunho e o que dispara o envio ao PyPI, em publish-pypi.yml.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Construir e conferir
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # uv_build nao deriva a versao da tag, entao as duas sao mantidas a mao e
+      # podem divergir. Falhar aqui e barato; descobrir depois de publicar nao e,
+      # porque o PyPI nunca aceita reenviar uma versao.
+      - name: Conferir que a tag bate com a versao do pyproject
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          # --no-project usa o Python que o setup-uv instalou, sem resolver as
+          # dependencias do projeto: a conferencia roda antes do `uv sync` de
+          # proposito, para falhar no primeiro segundo.
+          version=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$tag" != "$version" ]; then
+            echo "::error::a tag $GITHUB_REF_NAME nao bate com a versao '$version' do pyproject.toml"
+            exit 1
+          fi
+          echo "tag e versao conferem: $version"
+
+      - name: Instalar dependencias
+        run: uv sync --locked --all-groups
+
+      # Repetido de proposito, mesmo com o CI verde no master: uma tag pode
+      # apontar para qualquer commit, inclusive um que nunca passou pelo CI.
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Testes
+        run: uv run pytest
+
+      - name: Construir sdist e wheel
+        run: uv build
+
+      # Pega o que o PyPI recusaria na hora do upload -- README que nao renderiza,
+      # metadados invalidos -- enquanto ainda da para corrigir e retaguear.
+      - name: Validar os metadados
+        run: uvx twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  draft-release:
+    name: Abrir a release em rascunho
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      # O `gh` ja vem no runner, entao nao ha action de terceiro no caminho que
+      # tem permissao de escrita no repositorio.
+      - name: Criar o rascunho com os artefatos anexados
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME" \
+            dist/*
+
+      - name: Resumo
+        run: |
+          {
+            echo "### Rascunho de \`$GITHUB_REF_NAME\` criado"
+            echo
+            echo "Revise as notas e os arquivos anexados em [Releases](https://github.com/$GITHUB_REPOSITORY/releases)."
+            echo "**Publicar o rascunho envia o pacote ao PyPI.**"
+          } >> "$GITHUB_STEP_SUMMARY"

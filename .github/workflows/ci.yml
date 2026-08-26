@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Uma nova execucao no mesmo ref cancela a anterior: o que importa e o
+# resultado do ultimo commit, nao o da versao que ja foi substituida.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Uma combinacao que quebra nao esconde o resultado das outras -- saber se
+      # a falha e so do Windows ou de todas muda o diagnostico.
+      fail-fast: false
+      matrix:
+        # O Windows nao esta aqui por simetria: a biblioteca sanitiza nomes de
+        # arquivo, adivinha encoding e controla na mao o tempo de vida dos
+        # handles de ZIP (ver o comentario em open_resource_chunks sobre apagar
+        # arquivo com membro aberto). Ate hoje isso so rodava na maquina do autor.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # --locked falha se o uv.lock estiver defasado em relacao ao pyproject,
+      # em vez de resolver de novo e passar por cima da divergencia.
+      - name: Instalar dependencias
+        run: uv sync --locked --all-groups
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      # Os testes marcados como `network` ficam de fora (addopts no pyproject):
+      # o CI nao pode depender do portal do INSS nem do Hugging Face estarem de
+      # pe. Ver o To-do do README para a lacuna que isso deixa.
+      - name: Testes
+        run: uv run pytest
