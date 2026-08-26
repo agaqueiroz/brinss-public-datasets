@@ -9,7 +9,7 @@ from responses import matchers
 
 from brinss.datasets import _cache, _ckan, _loader, _log, _reading
 from brinss.datasets._catalog import ResourceEntry
-from brinss.datasets.enums import XlsxEngine
+from brinss.datasets.enums import DataSource, XlsxEngine
 from brinss.datasets.exceptions import ColumnNotFoundError
 
 SLUG = "beneficios-concedidos-plano-de-dados-abertos-jun-2023-a-jun-2025"
@@ -122,13 +122,15 @@ def test_load_dataset_logs_concatenation_only_for_multiple_periods(cache_dir, ma
             responses.GET, resource["url"], body=make_xlsx_bytes([{"beneficio": "auxilio", "valor": 900}]), status=200
         )
 
-    _loader.load_dataset("beneficios_concedidos", periodo=("2024-05", "2024-06"), cache_dir=cache_dir)
+    _loader.load_dataset(
+        "beneficios_concedidos", periodo=("2024-05", "2024-06"), cache_dir=cache_dir, source=DataSource.INSS
+    )
     assert any(
         message.startswith("Concatenated 2 periods: 2 rows x 3 columns in ") for message in _messages(brinss_logs)
     )
 
     brinss_logs.clear()
-    _loader.load_dataset("beneficios_concedidos", periodo="2024-06", cache_dir=cache_dir)
+    _loader.load_dataset("beneficios_concedidos", periodo="2024-06", cache_dir=cache_dir, source=DataSource.INSS)
     assert all("Concatenated" not in message for message in _messages(brinss_logs))
 
 

@@ -4,6 +4,10 @@ Carregamento (com download e cache automáticos) dos datasets abertos do INSS
 publicados em [dadosabertos.inss.gov.br](https://dadosabertos.inss.gov.br),
 no estilo `load_iris()` do scikit-learn.
 
+Os dados podem vir do portal do INSS ou do espelho em Parquet no Hugging Face
+gerado por este mesmo repositório — que é o padrão, por ser muito mais rápido e
+leve. Veja [Fonte dos dados](#fonte-dos-dados).
+
 ## Instalação
 
 ```bash
@@ -49,10 +53,64 @@ df = load_dataset(
     as_dict=False,          # True: dict[str, DataFrame] por período, em vez de concatenar
     columns=None,           # lista de colunas para carregar só um subconjunto
     dtype="str",            # "str": tudo como texto (padrão) | "infer": pandas infere os tipos
+    source="hf",            # "hf": espelho Parquet (padrão) | "inss": portal dadosabertos.inss.gov.br
     force_download=False,   # ignora o cache local e baixa de novo
     force_refresh=False,    # ignora o cache (24h) do catálogo de períodos disponíveis
     cache_dir=None,         # sobrescreve o diretório de cache para esta chamada
 )
+```
+
+## Fonte dos dados
+
+O parâmetro `source` escolhe de onde os arquivos são baixados:
+
+```python
+df = load_beneficios_concedidos(periodo="2024-06")                 # espelho no Hugging Face (padrão)
+df = load_beneficios_concedidos(periodo="2024-06", source="inss")  # portal do INSS
+```
+
+| | `source="hf"` (padrão) | `source="inss"` |
+| --- | --- | --- |
+| Origem | [espelho em Parquet no Hugging Face](https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets) | [dadosabertos.inss.gov.br](https://dadosabertos.inss.gov.br) |
+| Formato | Parquet zstd, um arquivo por mês | XLSX, ou ZIP com CSV dentro |
+| Download | 7,7 MB | 68,6 MB |
+| Leitura | 3,3 s | 101,4 s |
+| `columns=[...]` | lido só o que foi pedido, direto do arquivo | arquivo inteiro lido, colunas descartadas depois |
+| Atualidade | pode ficar um ciclo de publicação atrás do portal | sempre o mais recente |
+| Disponibilidade | não depende da CKAN estar de pé | depende |
+
+Os números de download e leitura são de `beneficios_concedidos` em junho/2024
+(628.457 linhas × 24 colunas), medidos numa mesma máquina — cerca de **9× menos
+bytes e 30× menos tempo**. A diferença cresce nas famílias pesadas, onde a
+alternativa é descompactar gigabytes de CSV.
+
+**As duas fontes entregam o mesmo DataFrame.** Mesmos nomes de coluna (incluindo
+os sufixos de nomes repetidos, `APS` e `APS.1`), mesma coluna
+`periodo_referencia` como `pandas.Period`, mesmo `dtype="str"` por padrão. Não é
+coincidência: o Parquet do espelho é gerado por esta mesma biblioteca lendo o
+arquivo do portal (veja
+[Publicação em Parquet no Hugging Face](#publicação-em-parquet-no-hugging-face)),
+então a linha de título das planilhas, a escolha do membro do ZIP e a detecção
+de encoding já vêm resolvidas de lá — resolvidas uma vez, e não a cada leitura.
+Há um teste de rede que carrega o mesmo mês pelas duas fontes e compara os
+DataFrames.
+
+Vale usar `source="inss"` quando:
+
+- o mês acabou de ser publicado no portal e ainda não subiu para o espelho —
+  como o espelho é reconstruído a partir do portal, ele fica para trás por até
+  um ciclo de publicação. Nesse caso o período aparece como indisponível na
+  fonte `hf`, e a mensagem de erro lembra de tentar a outra;
+- você quer auditar o espelho contra a origem oficial.
+
+O espelho cobre hoje as 8 famílias, de junho/2023 a julho/2026. Para ver o que
+cada fonte tem, `list_periods` também aceita `source`:
+
+```python
+from brinss.datasets import list_periods
+
+list_periods("beneficios_concedidos")                  # meses no espelho
+list_periods("beneficios_concedidos", source="inss")   # meses no portal
 ```
 
 Outras funções úteis:
@@ -77,12 +135,26 @@ sistema operacional (via [`platformdirs`](https://pypi.org/project/platformdirs/
 Para usar outro diretório, defina a variável de ambiente `BRINSS_DATA_HOME`
 ou passe `cache_dir=...` em qualquer chamada de `load_*`/`load_dataset`.
 
+As duas fontes dividem o mesmo diretório, sem colidir: o Parquet do espelho e o
+XLSX do portal são arquivos distintos, cada um com sua linha no registro de
+hashes. Carregar o mesmo mês pelas duas fontes deixa as duas cópias em disco.
+
 O portal não publica checksum dos arquivos; no primeiro download o SHA256 é
 calculado e guardado localmente, e passa a ser conferido nas chamadas
 seguintes (detectando automaticamente se o governo trocar o conteúdo de um
 arquivo sem trocar o nome).
 
+O catálogo de períodos disponíveis também fica em cache por 24h, nas duas
+fontes: a resposta da CKAN na fonte `inss`, o `manifest.json` na fonte `hf`.
+`force_refresh=True` ignora esse cache. Se a fonte estiver fora do ar e houver
+cache local, ele é usado com um aviso, em vez de a chamada falhar.
+
 ### Formato dos arquivos
+
+Esta seção é sobre a fonte `inss`. Na fonte `hf` nada disso se aplica: é sempre
+Parquet, com nomes de coluna e encoding gravados dentro do próprio arquivo. A
+biblioteca reconhece o formato pelos primeiros bytes do arquivo baixado, então
+nem precisa saber de qual fonte ele veio.
 
 O campo `format` que a CKAN retorna para cada recurso não é confiável: já foi
 visto marcado como `CSV` para um arquivo que na prática é um **ZIP contendo
@@ -152,6 +224,13 @@ from brinss.datasets import ColumnDtype
 df = load_beneficios_concedidos(periodo="2024-06", dtype=ColumnDtype.INFER)
 ```
 
+Na fonte `hf` as colunas já estão gravadas como texto no Parquet, então
+`dtype="infer"` é aplicado depois da leitura, coluna a coluna: a que converte
+inteira para número vira número, a que não converte fica texto. O resultado bate
+com o da fonte `inss` nestes datasets — cujas colunas são número ou texto livre
+— e perde os zeros à esquerda do mesmo jeito, que é justamente o que
+`dtype="infer"` significa.
+
 Duas observações sobre o modo texto:
 
 - Células vazias continuam saindo como `NaN`, e não como `""` — `.isna()` segue
@@ -175,12 +254,22 @@ suspensos de maio/2025, que o portal publicou rotulado como "abril 2025".
 
 ### Arquivos grandes
 
-Alguns meses descompactam para vários gigabytes. Tamanhos por mês, medidos em
-maio/2026: `beneficios_mantidos_ativos` ~891 MB, `beneficios_mantidos_cessados`
-~786 MB e `beneficios_emitidos` ~763 MB compactados — um único mês de
-`beneficios_emitidos` chega a ~10 GB descompactado. `beneficios_mantidos_suspensos`,
-em contraste, é leve (~5 MB/mês). `periodo="all"` ou intervalos grandes nas
-famílias pesadas podem exigir bastante RAM e espaço em disco. Nenhum limite é aplicado
+Alguns meses descompactam para vários gigabytes. Na fonte `inss`, tamanhos por
+mês medidos em maio/2026: `beneficios_mantidos_ativos` ~891 MB,
+`beneficios_mantidos_cessados` ~786 MB e `beneficios_emitidos` ~763 MB
+compactados — um único mês de `beneficios_emitidos` chega a ~10 GB
+descompactado. `beneficios_mantidos_suspensos`, em contraste, é leve
+(~5 MB/mês).
+
+Na fonte padrão o download encolhe bastante (`beneficios_mantidos_ativos` fica
+em ~385 MB/mês em Parquet) e a leitura deixa de passar por descompactar CSV de
+gigabytes. O DataFrame resultante ocupa a mesma RAM, então o cuidado abaixo
+continua valendo; o que muda é o custo de chegar até ele. `columns=[...]` ajuda
+mais aqui do que na fonte `inss`: no Parquet as colunas descartadas não chegam a
+ser lidas.
+
+`periodo="all"` ou intervalos grandes nas famílias pesadas podem exigir bastante
+RAM e espaço em disco. Nenhum limite é aplicado
 automaticamente nesta versão — prefira pedir um `periodo` específico e, se
 precisar, usar `columns=[...]` para reduzir o volume carregado em memória.
 Nessas famílias pesadas vale lembrar que o padrão `dtype="str"` costuma ocupar
@@ -223,10 +312,17 @@ pooch.get_logger().setLevel("WARNING")
 
 O repositório traz um script de manutenção que converte os datasets para Parquet
 e publica em
-[huggingface.co/datasets/agaqueiroz/brinss-public-datasets](https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets).
-Ele vive em `scripts/`, fora de `src/brinss`, e portanto **não faz parte do
-pacote distribuído** — usa a própria biblioteca para ler os arquivos, herdando
-de graça o tratamento de banner, membros de ZIP e encoding.
+[huggingface.co/datasets/agaqueiroz/brinss-public-datasets](https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets)
+— o espelho que a biblioteca lê por padrão. Ele vive em `scripts/`, fora de
+`src/brinss`, e portanto **não faz parte do pacote distribuído** — usa a própria
+biblioteca para ler os arquivos, herdando de graça o tratamento de banner,
+membros de ZIP e encoding. Ele sempre lê da fonte `inss`, claro: converter o
+espelho de volta para ele mesmo publicaria cópia de cópia.
+
+O layout do repositório (`data/<família>/<AAAA-MM>.parquet`, `manifest.json`)
+está em `src/brinss/datasets/_hf.py`, importado tanto pelo script que escreve
+quanto pelo código que lê. Quem escreve e quem lê não podem divergir sobre onde
+um arquivo mora.
 
 ```bash
 uv run --group publish python scripts/publish_to_hf.py            # mostra o plano
@@ -397,6 +493,11 @@ sai como string `AAAA-MM` em vez de `pandas.Period`: o Parquet guardaria o
 `Period` como um tipo de extensão do pandas sobre o ordinal do mês (`2024-06`
 vira `653`), e todo leitor que não fosse pandas — o viewer do Hugging Face,
 DuckDB, polars — mostraria um inteiro sem sentido.
+
+Ao carregar pela fonte `hf`, a biblioteca descarta essa coluna de texto e insere
+de volta o `pandas.Period` — as duas fontes devolvem a mesma coluna, do mesmo
+tipo, na mesma posição. Quem lê o Parquet direto (DuckDB, polars, o viewer do
+Hub) continua vendo a string legível.
 
 ## To-do
 

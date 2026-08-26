@@ -6,6 +6,10 @@ class CkanUnavailableError(BrinssError):
     """The CKAN API could not be reached and no usable local cache was found."""
 
 
+class HuggingFaceUnavailableError(BrinssError):
+    """The Hugging Face mirror could not be reached and no usable local cache was found."""
+
+
 class PeriodError(BrinssError, ValueError):
     """A ``periodo`` value could not be parsed."""
 
