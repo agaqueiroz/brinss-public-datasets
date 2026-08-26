@@ -1,6 +1,6 @@
 [project]
 name = "brinss-public-datasets"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "Carregamento e cache de datasets abertos do INSS, no estilo load_iris() do scikit-learn"
 readme = "README.md"
 license = "MIT"
