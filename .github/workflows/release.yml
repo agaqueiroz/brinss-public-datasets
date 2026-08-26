@@ -84,11 +84,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Sem isso, um ensaio como v0.1.0rc1 apareceria como "Latest release"
+          # na pagina do repositorio, acima da ultima versao estavel. O criterio
+          # e o do PEP 440: o que nao for so digito e ponto e pre-release --
+          # exceto `.postN`, que vem DEPOIS de uma versao e portanto e estavel.
+          prerelease=""
+          case "${GITHUB_REF_NAME#v}" in
+            *post*) ;;
+            *[!0-9.]*) prerelease="--prerelease" ;;
+          esac
+
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --generate-notes \
             --title "$GITHUB_REF_NAME" \
+            $prerelease \
             dist/*
 
       - name: Resumo
