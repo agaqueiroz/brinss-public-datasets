@@ -17,7 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # Versao exata, e nao @v10: o setup-uv publica releases ate a v10 mas
+      # so mantem tags flutuantes de major ate a v7, entao @v10 nao resolve.
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
