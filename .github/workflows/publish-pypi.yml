@@ -1,0 +1,47 @@
+name: Publish to PyPI
+
+# Publicar a release (sair do rascunho) e o que envia o pacote ao PyPI.
+#
+# Autenticacao por Trusted Publishing (OIDC): nao ha token guardado no
+# repositorio. O PyPI confia neste arquivo, neste repositorio, neste
+# environment -- os quatro valores estao cadastrados la e precisam bater com o
+# que esta aqui. Renomear este arquivo quebra a publicacao.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    name: Enviar ao PyPI
+    runs-on: ubuntu-latest
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/brinss-public-datasets
+
+    permissions:
+      id-token: write # o token OIDC trocado com o PyPI
+      contents: read # ler os artefatos anexados a release
+
+    steps:
+      # Os arquivos vem da release, e nao de um build novo: assim o .whl que as
+      # pessoas baixam do GitHub e byte a byte o mesmo que esta no PyPI. E torna
+      # o job re-executavel -- se o upload cair por rede, basta rodar de novo,
+      # sem retaguear nada.
+      - name: Baixar os artefatos da release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir dist \
+            --pattern '*.whl' \
+            --pattern '*.tar.gz'
+          ls -l dist
+
+      # Faz a troca do token OIDC e assina os artefatos (attestations, PEP 740).
+      - uses: pypa/gh-action-pypi-publish@release/v1
