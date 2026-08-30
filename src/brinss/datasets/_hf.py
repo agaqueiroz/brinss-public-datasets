@@ -1,10 +1,12 @@
 """The Hugging Face mirror: where its files live, and how to read the manifest.
 
-The mirror is written by ``scripts/publish_to_hf.py`` and read by
-``_catalog.py``. The layout below is the contract between the two, which is
-why it lives here rather than in either of them: a writer and a reader that
-disagreed about where a file goes would fail in the least debuggable way
-possible, as a month that is published and invisible at the same time.
+The mirror is written by a separate tool -- the ``brinss-public-datasets``
+publisher, which lives in its own repository -- and read by ``_catalog.py``.
+The layout below is the contract between the two, which is why it lives here
+rather than in either of them: a writer and a reader that disagreed about
+where a file goes would fail in the least debuggable way possible, as a month
+that is published and invisible at the same time. The writer imports it from
+this module for exactly that reason.
 
 Files are fetched over plain HTTPS instead of through ``huggingface_hub``. The
 repository is public, so nothing is gained by the extra dependency, and going
