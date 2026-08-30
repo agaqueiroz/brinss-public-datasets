@@ -43,15 +43,7 @@ Issues = "https://github.com/agaqueiroz/brinss-public-datasets/issues"
 "Dataset no Hugging Face" = "https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets"
 
 [dependency-groups]
-# Only the scripts under scripts/ need these; the library itself does not.
-publish = [
-    "huggingface-hub>=1.28",
-]
 dev = [
-    # huggingface-hub is needed here too: test_publish_to_hf.py stubs get_token()
-    # to exercise the missing-token gate, and monkeypatching it means importing
-    # the real module -- the script's lazy import does not spare the tests.
-    "huggingface-hub>=1.28",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "responses>=0.25",
@@ -71,5 +63,3 @@ markers = [
     "network: requires internet access (deselected by default)",
 ]
 addopts = "-m 'not network'"
-# scripts/ is not part of the distributed package, but its pure helpers are tested.
-pythonpath = ["scripts"]

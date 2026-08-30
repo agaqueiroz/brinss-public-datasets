@@ -101,7 +101,7 @@ os sufixos de nomes repetidos, `APS` e `APS.1`), mesma coluna
 `periodo_referencia` como `pandas.Period`, mesmo `dtype="str"` por padrão. Não é
 coincidência: o Parquet do espelho é gerado por esta mesma biblioteca lendo o
 arquivo do portal (veja
-[Publicação em Parquet no Hugging Face](#publicação-em-parquet-no-hugging-face)),
+[Espelho em Parquet no Hugging Face](#espelho-em-parquet-no-hugging-face)),
 então a linha de título das planilhas, a escolha do membro do ZIP e a detecção
 de encoding já vêm resolvidas de lá — resolvidas uma vez, e não a cada leitura.
 Há um teste de rede que carrega o mesmo mês pelas duas fontes e compara os
@@ -320,109 +320,19 @@ import pooch
 pooch.get_logger().setLevel("WARNING")
 ```
 
-## Publicação em Parquet no Hugging Face
+## Espelho em Parquet no Hugging Face
 
-O repositório traz um script de manutenção que converte os datasets para Parquet
-e publica em
-[huggingface.co/datasets/agaqueiroz/brinss-public-datasets](https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets)
-— o espelho que a biblioteca lê por padrão. Ele vive em `scripts/`, fora de
-`src/brinss`, e portanto **não faz parte do pacote distribuído** — usa a própria
-biblioteca para ler os arquivos, herdando de graça o tratamento de banner,
-membros de ZIP e encoding. Ele sempre lê da fonte `inss`, claro: converter o
-espelho de volta para ele mesmo publicaria cópia de cópia.
+A fonte padrão da biblioteca é o espelho em
+[huggingface.co/datasets/agaqueiroz/brinss-public-datasets](https://huggingface.co/datasets/agaqueiroz/brinss-public-datasets),
+gerado por uma ferramenta à parte, no repositório
+[br_public_datasets_publisher](https://github.com/agaqueiroz/br_public_datasets_publisher):
+ela lê os arquivos do portal *através desta biblioteca* — herdando de graça o
+tratamento de banner, membros de ZIP e encoding —, converte para Parquet e publica.
+Este repositório é só o lado que lê.
 
-O layout do repositório (`data/<família>/<AAAA-MM>.parquet`, `manifest.json`)
-está em `src/brinss/datasets/_hf.py`, importado tanto pelo script que escreve
-quanto pelo código que lê. Quem escreve e quem lê não podem divergir sobre onde
-um arquivo mora.
-
-```bash
-uv run --group publish python scripts/publish_to_hf.py            # mostra o plano
-uv run --group publish python scripts/publish_to_hf.py --push     # publica
-```
-
-**Dry run é o padrão.** Sem `--push` o script apenas lista o que subiria e o que
-seria pulado. Publicar exige um token de escrita, seja em `HF_TOKEN` seja
-guardado em disco por `hf auth login`.
-
-### Cache local dos Parquet
-
-Converter é a metade cara de uma execução: ler um XLSX de centenas de MB com o
-openpyxl leva minutos. Os arquivos convertidos ficam em `tmp/` (ignorada pelo
-git), no mesmo layout do Hub, ao lado de um `tmp/build-index.json` que registra
-de qual origem cada um saiu:
-
-```
-tmp/data/<família>/<AAAA-MM>.parquet
-tmp/build-index.json
-```
-
-Uma execução interrompida **retoma** daí em vez de recomeçar. Um Parquet só é
-reaproveitado quando o índice confere em três pontos: SHA256 da origem, receita
-de conversão e tamanho em bytes. O tamanho é o que descarta um arquivo truncado
-por queda de energia, cujo registro no índice está íntegro mas cujo conteúdo não.
-
-O índice **não** é o manifesto. O manifesto responde "isto está publicado no
-Hub"; o índice responde "isto já foi convertido aqui". Confundir os dois foi
-justamente o que estragou uma carga anterior.
-
-⚠️ **O cache cresce.** São 291 arquivos numa carga completa, e as famílias
-pesadas têm meses de vários GB. O resumo de cada execução mostra quanto `tmp/`
-está ocupando e avisa acima de 5 GB. Para liberar espaço sem perder trabalho
-útil, `--prune-parquet` apaga só os arquivos que o manifesto confirma publicados:
-
-```bash
-uv run --group publish python scripts/publish_to_hf.py --prune-parquet
-```
-
-### Gerar amostras locais
-
-`--sample` converte **só o que já está no cache de downloads**, gravando no
-mesmo `tmp/`:
-
-```bash
-uv run --group publish python scripts/publish_to_hf.py --sample
-```
-
-Ele nunca baixa nada e nunca fala com o Hub — meses ausentes do cache são
-reportados e pulados. É a forma barata de conferir o resultado real antes de
-encarar uma publicação completa, que são **291 arquivos** e dezenas de GB vindos
-do portal. Como grava no mesmo cache, também serve para **aquecer** um `--push`
-posterior: o que o `--sample` já converteu não é convertido de novo.
-
-Use `--parquet-dir` para gravar em outro lugar (`--sample-dir` continua valendo
-como apelido) e `--force` para reconverter o que já está em cache.
-
-### Log
-
-Cada execução grava um log em `logs/publish-AAAAMMDD-HHMMSS.log` (também
-ignorada pelo git), em nível DEBUG, com os downloads e leituras da biblioteca
-misturados aos passos do script. O console fica em INFO; `-v` mostra o DEBUG
-nele também, `--no-log-file` desliga o arquivo e `--log-dir`/`--log-file`
-mudam o destino.
-
-O log abre com o cabeçalho da execução (modo, repositório, famílias, períodos,
-receita de conversão, tamanho do manifesto) e fecha com um bloco de resumo:
-status explícito — `CONCLUIDO COM SUCESSO`, `CONCLUIDO COM FALHAS` ou
-`INTERROMPIDO` —, contagens, bytes convertidos e reaproveitados, commits,
-duração, **em que mês parou** e o erro de cada falha.
-
-A linha `iniciando <família>/<período>` é gravada *antes* do trabalho, não
-depois, e com `fsync`. É o que permite descobrir em que mês a máquina desligou:
-o último mês concluído não interessa, o que estava em andamento sim.
-
-Um mês que estoura (XLSX corrompido, por exemplo) é registrado e a execução
-**segue para o próximo**, terminando com código de saída 1. Códigos: `0` sucesso,
-`1` falhas parciais, `2` erro de uso.
-
-### Flags úteis
-
-`--familia` e `--periodo` (repetíveis) para restringir o escopo, `--limite N`
-para uma primeira carga parcial, `--force` para reenviar mesmo sem mudança,
-`--create-repo` para criar o repositório no Hub na primeira vez e
-`--commit-size` para ajustar quantos arquivos entram em cada commit.
-
-### Layout publicado
+O layout do espelho está em `src/brinss/datasets/_hf.py`, importado tanto por quem
+escreve quanto por quem lê. Quem escreve e quem lê não podem divergir sobre onde um
+arquivo mora:
 
 ```
 data/<família>/<AAAA-MM>.parquet
@@ -430,72 +340,9 @@ manifest.json
 README.md
 ```
 
-Um arquivo por mês, por família — é o que torna o reenvio incremental possível:
-se só um mês mudou na origem, só ele sobe. O `README.md` é gerado com um config
-do viewer por família, mas **só é escrito quando ainda não existe** no Hub, para
-não sobrescrever uma edição feita pela interface web. Para regerá-lo de
-propósito, use `--update-card`.
-
-### Dados e manifesto no mesmo commit
-
-Os arquivos sobem agrupados: um commit a cada `--commit-size` arquivos (padrão
-25) ou a cada 2 GB, o que vier primeiro, e sempre fechando no fim de cada
-família. Um commit por arquivo faria a primeira carga render umas 300 revisões
-no Hub, arriscando o rate limit no meio do caminho.
-
-**O `manifest.json` viaja no mesmo commit dos arquivos que ele descreve.** Ele
-era enviado só no fim da execução, o que abria uma janela — de minutos, numa
-carga completa — em que o Hub tinha arquivos que o manifesto desconhecia. Não é
-hipotético: um desligamento abrupto da máquina dentro dessa janela deixou 25
-meses publicados e não registrados, e toda execução seguinte os reconvertia e
-reenviava como `novo`. Com os dois no mesmo commit esse estado é inalcançável.
-
-Um manifesto ilegível é **erro fatal**, nunca um manifesto vazio: tratá-lo como
-vazio reclassificaria os 291 meses como `novo` e reenviaria o dataset inteiro.
-
-### Reconciliar arquivos órfãos
-
-Sempre que fala com o Hub, o script compara a listagem do repositório com o
-manifesto e avisa sobre **órfãos** — Parquet publicados sem entrada no manifesto,
-que seriam reenviados como `novo` para sempre. Com o commit atômico isso não
-deve mais acontecer; quando acontecer, o log conta.
-
-`--reconciliar` adota esses arquivos no manifesto sem reconverter nem reenviar:
-
-```bash
-uv run --group publish python scripts/publish_to_hf.py --reconciliar          # lista
-uv run --group publish python scripts/publish_to_hf.py --reconciliar --push   # grava
-```
-
-O SHA da origem vem, nessa ordem, do `registry.json` do cache de downloads (que
-guarda o hash mesmo depois do arquivo de origem ser apagado), do arquivo em
-cache, ou de um download. A entrada nasce com `rows: null` e `adopted: true` — a
-contagem de linhas exigiria reler a origem, que é exatamente o custo que a
-reconciliação existe para evitar.
-
-**A ressalva:** reconciliar assume que o Parquet publicado foi gerado da origem
-que está no portal *agora*. Se o portal trocou o arquivo entre o envio e a
-reconciliação, a entrada nasce errada e aquele mês nunca mais se atualiza
-sozinho. O `adopted: true` marca esses casos para uma auditoria futura com
-`--force`.
-
-### Como o script evita reenviar o que não mudou
-
-O `manifest.json` guarda, para cada arquivo publicado, o **SHA256 do arquivo de
-origem** de que ele foi gerado — o mesmo hash que a biblioteca já calcula para o
-cache local. Um mês só é reconvertido quando esse hash muda (o portal troca o
-conteúdo sem trocar o nome), quando a receita de conversão muda, ou com
-`--force`.
-
-O hash é o do arquivo **de origem**, e não o do Parquet, de propósito: Parquet
-não é byte-reproduzível entre versões do pyarrow, então comparar o resultado
-faria todo mês parecer alterado a cada execução.
-
-Como o portal não publica checksum, saber se um mês mudou exige ter o arquivo
-de origem em mãos. O manifesto poupa a parte cara — leitura, conversão e upload
-—, não o download. Para não transformar um simples `--push`-less em dezenas de
-GB de tráfego, o dry run **não baixa nada**: meses ainda ausentes do cache
-aparecem como `fonte ainda nao baixada`.
+Um arquivo por mês, por família — é o que permite à biblioteca baixar só os meses
+pedidos, e ao publicador reenviar só o que mudou. O `manifest.json` guarda, de cada
+arquivo publicado, o SHA256 do arquivo **de origem** de que ele foi gerado.
 
 ### Tipos no Parquet
 
@@ -528,14 +375,10 @@ Hub) continua vendo a string legível.
       propósito — dependem do portal e do espelho estarem de pé, e um deles baixa
       dados de verdade —, mas isso significa que hoje **nada avisa** quando o INSS
       muda o layout de um arquivo ou quando as duas fontes deixam de concordar.
-- [ ] Automatizar a atualização do espelho no Hugging Face. Hoje
-      `scripts/publish_to_hf.py` é rodado à mão, então um mês novo no portal só
-      chega à fonte `hf` quando alguém lembra de rodá-lo — é a causa do atraso
-      descrito em [Fonte dos dados](#fonte-dos-dados).
 - [ ] Expor leitura em streaming na API pública. `open_resource_chunks` já existe
-      e é o que permite ao script de publicação converter arquivos de dezenas de
-      GB, mas quem chama `load_*` ainda recebe o mês inteiro de uma vez —
-      `periodo="all"` nas famílias pesadas continua limitado pela RAM.
+      e é o que permite ao publicador converter arquivos de dezenas de GB, mas quem
+      chama `load_*` ainda recebe o mês inteiro de uma vez — `periodo="all"` nas
+      famílias pesadas continua limitado pela RAM.
 - [ ] Medir cobertura de testes: `pytest-cov` está no grupo `dev`, mas nenhum
       comando o usa e não há mínimo configurado.
 - [ ] Refinar `dtype="infer"` na fonte `hf`. A conversão pós-leitura só tenta

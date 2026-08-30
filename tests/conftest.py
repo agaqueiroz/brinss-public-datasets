@@ -75,9 +75,10 @@ def make_parquet_bytes():
         """Build a Parquet file shaped exactly like the ones on the mirror.
 
         Which means: every value a string, and ``periodo_referencia`` first and
-        as text rather than as a pandas Period -- see ``publish_to_hf`` for why
-        it is written that way. ``columns`` overrides the column names, to
-        exercise the duplicates some families publish.
+        as text rather than as a pandas Period -- a Period would be stored as a
+        pandas extension type over the month ordinal, which every non-pandas
+        reader shows as a meaningless integer. ``columns`` overrides the column
+        names, to exercise the duplicates some families publish.
         """
         import pyarrow as pa
         import pyarrow.parquet as pq

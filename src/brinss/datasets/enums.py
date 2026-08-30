@@ -25,9 +25,9 @@ class DataSource(str, Enum):
     """Where the monthly files are downloaded from.
 
     ``HF`` is the default. The Hugging Face mirror holds the very same tables
-    -- it is built by this repository's own ``scripts/publish_to_hf.py``,
-    which reads the portal's files through this library and writes one zstd
-    Parquet per month -- but it is a far cheaper thing to read: a fraction of
+    -- it is built by the companion publisher tool, which reads the portal's
+    files through this library and writes one zstd Parquet per month -- but it
+    is a far cheaper thing to read: a fraction of
     the bytes over the wire, seconds instead of the minutes openpyxl spends on
     a large sheet, and ``columns`` pushed down into the file so the columns
     nobody asked for are never even decompressed. The banner rows, zip members
