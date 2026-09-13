@@ -68,9 +68,19 @@ def fetch_resource(
     The CKAN portal never publishes a hash or size for its resources, so the
     first download of a given file happens with no integrity check. The
     SHA256 is then computed locally and persisted in ``registry.json``; from
-    then on pooch verifies that hash on every fetch, which also means it
-    will transparently re-download if the government ever replaces a file's
-    contents at the same URL without renaming it.
+    then on pooch verifies the cached copy against it on every fetch.
+
+    That check is local only. A cached file whose hash matches is handed back
+    without touching the network, so a file the government replaces at the
+    same URL goes unnoticed until ``force_download=True``. pooch only goes
+    back to the server when the cached copy no longer matches (truncated or
+    corrupted), and then a changed remote file fails its strict hash check.
+    A month the portal republishes as a new resource is a different matter: it
+    carries a new ``resource_id``, and so a new cached name.
+
+    The hash is always the SHA256 of the whole file, never of a sample: the
+    publisher compares it with the ``source_sha256`` it records in the
+    mirror's manifest.
 
     Both sources come through here unchanged. Their file names never collide:
     the entry the mirror produces is named after its family and period and
@@ -113,15 +123,18 @@ def fetch_resource(
     fetched = Path(fetcher.fetch(filename))
     elapsed = time.perf_counter() - started_at
 
-    size = _log.format_bytes(fetched.stat().st_size)
+    stat = fetched.stat()
+    size = _log.format_bytes(stat.st_size)
     logger = _log.get_logger()
-    if fetched.stat().st_mtime_ns != mtime_before:
+    if stat.st_mtime_ns != mtime_before:
         logger.info("Download complete: '%s' (%s) in %s.", filename, size, _log.format_seconds(elapsed))
     else:
         logger.info("Using cached file '%s' (%s).", filename, size)
 
     if known_hash is None:
-        digest = hashlib.sha256(fetched.read_bytes()).hexdigest()
+        # In blocks rather than via read_bytes(): a portal ZIP runs past 2 GB.
+        with fetched.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
         registry[key] = f"sha256:{digest}"
         _save_registry(cache_root, registry)
 

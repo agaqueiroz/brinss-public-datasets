@@ -7,6 +7,7 @@ import pytest
 
 from brinss.datasets._catalog import ResourceEntry
 from brinss.datasets._reading import (
+    _infer_types,
     open_resource_chunks,
     read_resource,
     resource_encodings,
@@ -209,8 +210,8 @@ def test_read_resource_xlsx_with_banner_accepts_real_column_names(tmp_path, make
 
 
 def test_read_resource_xlsx_with_banner_inside_zip(tmp_path, make_xlsx_bytes):
-    # Exercises the io.BytesIO branch of _read_zip, where the peek at the header
-    # leaves the stream at EOF unless it is rewound.
+    # Exercises the io.BytesIO branch of _open_source: the workbook comes from
+    # memory, and the header peek and the read must both see all of it.
     buffer_path = tmp_path / "res.zip"
     with zipfile.ZipFile(buffer_path, "w") as archive:
         archive.writestr("dados.xlsx", make_xlsx_bytes(ROWS, banner=BANNER))
@@ -227,6 +228,116 @@ def test_read_resource_legacy_xls_skips_banner_row(tmp_path, make_xls_bytes):
 
     assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
     assert len(df) == 2
+
+
+def _count_calls(monkeypatch, module, name: str) -> list[None]:
+    """Wrap ``module.name`` so every call is recorded, and return the record."""
+    calls: list[None] = []
+    original = getattr(module, name)
+
+    def counting(*args, **kwargs):
+        calls.append(None)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, counting)
+    return calls
+
+
+def test_an_xlsx_workbook_is_loaded_once_for_peek_and_read(tmp_path, make_xlsx_bytes, monkeypatch):
+    import openpyxl
+
+    path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS, banner=BANNER))
+    calls = _count_calls(monkeypatch, openpyxl, "load_workbook")
+
+    read_resource(path, _entry(format_="XLSX"), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert len(calls) == 1
+
+
+def test_a_legacy_xls_is_parsed_once_for_peek_and_read(tmp_path, make_xls_bytes, monkeypatch):
+    # xlrd parses the whole file on open, so a second open is a second full parse.
+    import xlrd
+
+    path = _write(tmp_path, "res.xls", make_xls_bytes(ROWS, banner=BANNER))
+    calls = _count_calls(monkeypatch, xlrd, "open_workbook")
+
+    read_resource(path, _entry(format_="XLS"), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert len(calls) == 1
+
+
+def test_the_spreadsheet_file_is_released_after_reading(tmp_path, make_xlsx_bytes):
+    # On Windows a handle left open by the workbook makes unlink fail outright.
+    path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS, banner=BANNER))
+
+    read_resource(path, _entry(format_="XLSX"), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    path.unlink()
+
+
+# --------------------------------------------------------------------------
+# Parquet from the Hugging Face mirror
+# --------------------------------------------------------------------------
+
+
+def _record_parquet_columns(monkeypatch) -> list:
+    """Record the ``columns`` every pd.read_parquet call is made with."""
+    requested: list = []
+    original = pd.read_parquet
+
+    def recording(path, *args, columns=None, **kwargs):
+        requested.append(columns)
+        return original(path, *args, columns=columns, **kwargs)
+
+    monkeypatch.setattr(pd, "read_parquet", recording)
+    return requested
+
+
+def test_parquet_period_column_is_not_read_only_to_be_dropped(tmp_path, make_parquet_bytes, monkeypatch):
+    path = _write(tmp_path, "res.parquet", make_parquet_bytes(ROWS, period="2024-06"))
+    expected = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+    requested = _record_parquet_columns(monkeypatch)
+
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert requested == [["beneficio", "valor"]]
+    pd.testing.assert_frame_equal(df, expected)
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert list(df["periodo_referencia"]) == [pd.Period("2024-06", freq="M")] * 2
+
+
+def test_parquet_period_column_is_left_out_of_an_explicit_selection(tmp_path, make_parquet_bytes, monkeypatch):
+    path = _write(tmp_path, "res.parquet", make_parquet_bytes(ROWS, period="2024-06"))
+    requested = _record_parquet_columns(monkeypatch)
+
+    df = read_resource(path, _entry(), columns=["periodo_referencia", "valor"], engine=XlsxEngine.OPENPYXL)
+
+    assert requested == [["valor"]]
+    assert list(df.columns) == ["periodo_referencia", "valor"]
+    assert list(df["periodo_referencia"]) == [pd.Period("2024-06", freq="M")] * 2
+
+
+def test_parquet_asking_only_for_the_period_column_keeps_every_row(tmp_path):
+    # Projecting a pandas-written Parquet to no columns at all loses the row
+    # count, so the period column is still read in this one case.
+    path = tmp_path / "res.parquet"
+    pd.DataFrame({"periodo_referencia": ["2024-06"] * 3, "valor": ["1", "2", "3"]}).to_parquet(path, index=False)
+
+    df = read_resource(path, _entry(), columns=["periodo_referencia"], engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia"]
+    assert len(df) == 3
+
+
+def test_infer_types_does_not_touch_the_frame_it_was_given():
+    frame = pd.DataFrame({"codigo": ["01234", "00042"], "nome": ["a", "b"]})
+    original_dtypes = frame.dtypes.copy()
+
+    inferred = _infer_types(frame)
+
+    assert inferred["codigo"].tolist() == [1234, 42]
+    pd.testing.assert_series_equal(frame.dtypes, original_dtypes)
+    assert frame["codigo"].tolist() == ["01234", "00042"]
 
 
 # Codes published by the INSS (CID, CBO, CNAE, IBGE municipality) are text with
