@@ -80,6 +80,7 @@ df = load_dataset(
     force_download=False,   # ignora o cache local e baixa de novo
     force_refresh=False,    # ignora o cache (24h) do catálogo de períodos disponíveis
     cache_dir=None,         # sobrescreve o diretório de cache para esta chamada
+    chunksize=None,         # N: devolve pedaços de até N linhas, um mês por vez (veja "Leitura em pedaços")
 )
 ```
 
@@ -296,13 +297,59 @@ continua valendo; o que muda é o custo de chegar até ele. `columns=[...]` ajud
 mais aqui do que na fonte `inss`: no Parquet as colunas descartadas não chegam a
 ser lidas.
 
-`periodo="all"` ou intervalos grandes nas famílias pesadas podem exigir bastante
-RAM e espaço em disco. Nenhum limite é aplicado
-automaticamente nesta versão — prefira pedir um `periodo` específico e, se
-precisar, usar `columns=[...]` para reduzir o volume carregado em memória.
-Nessas famílias pesadas vale lembrar que o padrão `dtype="str"` costuma ocupar
-mais RAM que colunas numéricas; se os códigos com zero à esquerda não importarem
-para a sua análise, `dtype="infer"` reduz o consumo.
+`periodo="all"` ou intervalos grandes nas famílias pesadas, carregados de uma vez,
+podem exigir bastante RAM. Quando o resultado não precisa estar inteiro na
+memória, leia em pedaços com `chunksize` (veja
+[Leitura em pedaços](#leitura-em-pedaços-streaming)). Quando precisa,
+`columns=[...]` reduz o volume. Nessas famílias pesadas vale lembrar que o
+padrão `dtype="str"` costuma ocupar mais RAM que colunas numéricas; se os códigos
+com zero à esquerda não importarem para a sua análise, `dtype="infer"` reduz o
+consumo.
+
+### Leitura em pedaços (streaming)
+
+Com `chunksize=N`, qualquer `load_*` devolve os dados em DataFrames de até `N`
+linhas, em vez de um DataFrame só:
+
+```python
+from brinss.datasets import load_beneficios_emitidos
+
+for chunk in load_beneficios_emitidos(periodo="all", chunksize=500_000):
+    ...  # cada chunk tem periodo_referencia, como no DataFrame inteiro
+```
+
+- **Um mês por vez.** Os meses saem em ordem, e cada um só é baixado quando
+  chega a vez dele. A RAM fica na ordem de um pedaço; o disco continua guardando
+  cada mês baixado no cache.
+- **Parar no meio.** Use `with`, que fecha o arquivo em leitura na hora — no
+  Windows, é o que deixa o arquivo do cache ser apagado ou baixado de novo logo
+  em seguida:
+
+  ```python
+  with load_dataset("beneficios_emitidos", periodo="all", chunksize=500_000) as chunks:
+      for chunk in chunks:
+          if achou_o_que_procurava(chunk):
+              break
+  ```
+
+- **Por fonte.** Na fonte `hf`, o Parquet é lido em lotes e só as colunas pedidas
+  são lidas. Na fonte `inss`, os CSVs (inclusive dentro de ZIP) saem em pedaços,
+  mas as planilhas saem como um pedaço por mês: o pandas só as lê inteiras, e
+  todas as publicadas cabem em memória.
+- **Tipos.** Com `dtype="infer"`, cada pedaço infere os próprios tipos, e uma
+  coluna pode sair `int64` num pedaço e `float64` noutro. O padrão `dtype="str"`
+  não tem esse problema.
+- **Erros cedo.** Período indisponível e `chunksize` inválido levantam erro já
+  em `load_*(...)`, antes de qualquer download; uma coluna inexistente em
+  `columns=[...]`, no primeiro pedaço do mês. `as_dict=True` não combina com
+  `chunksize`.
+- **`StreamEncodingError`.** Na fonte `inss`, o encoding de um CSV é escolhido
+  por uma amostra do começo do arquivo. Se um acento lá na frente mostrar que a
+  escolha estava errada, a leitura inteira recomeça sozinha com o encoding certo.
+  Em pedaços isso só é possível enquanto nenhum pedaço daquele arquivo foi
+  entregue. Depois disso a leitura para com `StreamEncodingError`, em vez de
+  entregar linhas decodificadas de dois jeitos. Nesse caso, use `source="hf"`
+  (Parquet, sem esse problema) ou leia aquele mês sem `chunksize`.
 
 ### Mensagens de progresso
 
@@ -391,10 +438,9 @@ Hub) continua vendo a string legível.
       propósito — dependem do portal e do espelho estarem de pé, e um deles baixa
       dados de verdade —, mas isso significa que hoje **nada avisa** quando o INSS
       muda o layout de um arquivo ou quando as duas fontes deixam de concordar.
-- [ ] Expor leitura em streaming na API pública. `open_resource_chunks` já existe
-      e é o que permite ao publicador converter arquivos de dezenas de GB, mas quem
-      chama `load_*` ainda recebe o mês inteiro de uma vez — `periodo="all"` nas
-      famílias pesadas continua limitado pela RAM.
+- [x] Expor leitura em streaming na API pública: `chunksize=` em `load_*`, com o
+      Parquet do espelho também lido em lotes (veja
+      [Leitura em pedaços](#leitura-em-pedaços-streaming)).
 - [ ] Medir cobertura de testes: `pytest-cov` está no grupo `dev`, mas nenhum
       comando o usa e não há mínimo configurado.
 - [ ] Refinar `dtype="infer"` na fonte `hf`. A conversão pós-leitura só tenta

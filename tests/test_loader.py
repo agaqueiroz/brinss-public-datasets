@@ -6,8 +6,13 @@ import responses
 from responses import matchers
 
 from brinss.datasets import _ckan, _loader
-from brinss.datasets.enums import DataSource
-from brinss.datasets.exceptions import ColumnNotFoundError, PeriodUnavailableError
+from brinss.datasets._catalog import ResourceEntry
+from brinss.datasets.enums import ColumnDtype, DataSource, XlsxEngine
+from brinss.datasets.exceptions import (
+    ColumnNotFoundError,
+    PeriodUnavailableError,
+    StreamEncodingError,
+)
 
 SLUG = "beneficios-concedidos-plano-de-dados-abertos-jun-2023-a-jun-2025"
 
@@ -180,6 +185,61 @@ def test_load_dataset_dtype_infer_reaches_the_reader(cache_dir, make_xlsx_bytes)
     df = _loader.load_dataset("beneficios_concedidos", dtype="infer", cache_dir=cache_dir, source=DataSource.INSS)
 
     assert df.loc[0, "valor"] == 1500
+
+
+# --------------------------------------------------------------------------
+# chunksize: a wrong encoding found mid-stream
+# --------------------------------------------------------------------------
+
+
+def _stream_entry() -> ResourceEntry:
+    return ResourceEntry(
+        period=pd.Period("2024-06", freq="M"),
+        url="https://fixtures.test/res.csv",
+        resource_id="res-1",
+        resource_name="Perfil das unidades junho 2024",
+        package_slug="slug",
+        format="CSV",
+    )
+
+
+def _cp1252_with_first_accent_past_the_sample(tmp_path, make_csv_bytes):
+    """A cp1252 CSV that opens with over 1 MB of ASCII, the perfil_unidades shape."""
+    filler = [{"unidade": f"UNIDADE {index:06d} " + "X" * 60, "especie": "APOSENTADORIA"} for index in range(20_000)]
+    accented = [{"unidade": "AVALIAÇÃO SÃO PAULO", "especie": "BENEFÍCIO POR INCAPACIDADE"}]
+    payload = make_csv_bytes(filler + accented, encoding="cp1252")
+    assert payload.index(b"\xc7") > 1_000_000, "a fixture precisa passar de 1 MB antes do acento"
+    path = tmp_path / "res.csv"
+    path.write_bytes(payload)
+    return path
+
+
+def _stream(path, *, chunk_rows: int):
+    return _loader._stream_resource(
+        path, _stream_entry(), columns=None, engine=XlsxEngine.OPENPYXL, dtype=ColumnDtype.STRING, chunk_rows=chunk_rows
+    )
+
+
+def test_stream_switches_encoding_while_nothing_was_handed_out(tmp_path, make_csv_bytes):
+    # The whole file fits in the first chunk, so the failure comes before any row
+    # reached the caller and starting over with cp1252 is invisible.
+    path = _cp1252_with_first_accent_past_the_sample(tmp_path, make_csv_bytes)
+
+    chunks = list(_stream(path, chunk_rows=100_000))
+
+    assert len(chunks) == 1
+    assert chunks[0]["unidade"].iloc[-1] == "AVALIAÇÃO SÃO PAULO"
+
+
+def test_stream_refuses_to_switch_encoding_after_handing_out_chunks(tmp_path, make_csv_bytes):
+    path = _cp1252_with_first_accent_past_the_sample(tmp_path, make_csv_bytes)
+    chunks = _stream(path, chunk_rows=1_000)
+
+    # The first rows reach the caller normally, decoded as utf-8...
+    assert next(chunks)["unidade"].iloc[0] == "UNIDADE 000000 " + "X" * 60
+    # ...so when the accent disproves that, switching now would mix two decodings.
+    with pytest.raises(StreamEncodingError, match='source="hf"'):
+        list(chunks)
 
 
 def test_load_dataset_invalid_dtype_raises_before_downloading(cache_dir):

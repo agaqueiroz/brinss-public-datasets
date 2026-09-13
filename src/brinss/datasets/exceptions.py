@@ -34,3 +34,14 @@ class MalformedCsvError(BrinssError):
     writing to Parquet then drops in silence. Published that way, the file loses
     data without anything along the path having failed.
     """
+
+
+class StreamEncodingError(BrinssError):
+    """A CSV turned out to have another encoding after chunks were already handed out.
+
+    The encoding is picked from a sample at the start of the file, and a wrong
+    pick always raises rather than mangling accents. A whole-file read simply
+    starts over with the next candidate, unseen by the caller. A read with
+    ``chunksize`` cannot: the rows before the failure are already with the
+    caller, so it stops here instead of handing out rows decoded two ways.
+    """

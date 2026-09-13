@@ -17,6 +17,13 @@ Por padrão todas as colunas vêm como texto (``str``), preservando zeros à
 esquerda em códigos como CID, CBO, CNAE e código IBGE. Para deixar o pandas
 inferir os tipos, passe ``dtype="infer"``.
 
+Para períodos que não cabem na memória, ``chunksize`` devolve os dados em
+pedaços de até N linhas, um mês por vez::
+
+    with load_beneficios_emitidos(periodo="all", chunksize=500_000) as chunks:
+        for chunk in chunks:
+            ...
+
 Fonte dos dados
 ---------------
 
@@ -47,10 +54,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pandas as pd
-
 from . import _cache
-from ._loader import list_datasets, list_periods, load_dataset
+from ._loader import (
+    DatasetChunks,
+    LoadResult,
+    list_datasets,
+    list_periods,
+    load_dataset,
+)
 from ._period import PeriodoLike
 from .enums import ColumnDtype, DataSource, XlsxEngine
 from .exceptions import (
@@ -61,6 +72,7 @@ from .exceptions import (
     MalformedCsvError,
     PeriodError,
     PeriodUnavailableError,
+    StreamEncodingError,
     UnsupportedArchiveError,
 )
 
@@ -70,11 +82,13 @@ __all__ = [
     "ColumnDtype",
     "ColumnNotFoundError",
     "DataSource",
+    "DatasetChunks",
     "HuggingFaceUnavailableError",
     "MalformedCsvError",
     "PeriodError",
     "PeriodUnavailableError",
     "PeriodoLike",
+    "StreamEncodingError",
     "UnsupportedArchiveError",
     "XlsxEngine",
     "get_cache_dir",
@@ -102,59 +116,53 @@ def get_cache_dir(cache_dir: str | os.PathLike | None = None) -> Path:
     return _cache.get_cache_root(cache_dir)
 
 
-def load_beneficios_concedidos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_beneficios_concedidos(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("beneficios_concedidos", periodo, **kwargs)
 
 
-def load_beneficios_emitidos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_beneficios_emitidos(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("beneficios_emitidos", periodo, **kwargs)
 
 
-def load_beneficios_mantidos_ativos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_beneficios_mantidos_ativos(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("beneficios_mantidos_ativos", periodo, **kwargs)
 
 
-def load_beneficios_mantidos_cessados(
-    periodo: PeriodoLike = None, **kwargs
-) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_beneficios_mantidos_cessados(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("beneficios_mantidos_cessados", periodo, **kwargs)
 
 
-def load_beneficios_mantidos_suspensos(
-    periodo: PeriodoLike = None, **kwargs
-) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_beneficios_mantidos_suspensos(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("beneficios_mantidos_suspensos", periodo, **kwargs)
 
 
-def load_beneficios_indeferidos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_beneficios_indeferidos(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("beneficios_indeferidos", periodo, **kwargs)
 
 
-def load_comunicacoes_acidente_trabalho(
-    periodo: PeriodoLike = None, **kwargs
-) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_comunicacoes_acidente_trabalho(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("comunicacoes_acidente_trabalho", periodo, **kwargs)
 
 
-def load_perfil_unidades(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_perfil_unidades(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("perfil_unidades", periodo, **kwargs)
 
 
-def load_pessoal_ativo_consolidado(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_pessoal_ativo_consolidado(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("pessoal_ativo_consolidado", periodo, **kwargs)
 
 
-def load_ocupantes_funcoes_cargos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_ocupantes_funcoes_cargos(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("ocupantes_funcoes_cargos", periodo, **kwargs)
 
 
-def load_pessoal_sem_identificacao(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_pessoal_sem_identificacao(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("pessoal_sem_identificacao", periodo, **kwargs)
 
 
-def load_requerimentos_solicitados(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_requerimentos_solicitados(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("requerimentos_solicitados", periodo, **kwargs)
 
 
-def load_requerimentos_pendentes(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+def load_requerimentos_pendentes(periodo: PeriodoLike = None, **kwargs) -> LoadResult:
     return load_dataset("requerimentos_pendentes", periodo, **kwargs)
