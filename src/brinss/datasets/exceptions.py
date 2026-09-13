@@ -24,3 +24,13 @@ class ColumnNotFoundError(BrinssError, KeyError):
 
 class UnsupportedArchiveError(BrinssError):
     """A downloaded ZIP resource doesn't have the expected single-data-file layout."""
+
+
+class MalformedCsvError(BrinssError):
+    """A CSV could not be read without losing columns.
+
+    Raised when the header and the records do not line up. Pandas does not
+    complain in that case -- it promotes the leftover columns to an index, which
+    writing to Parquet then drops in silence. Published that way, the file loses
+    data without anything along the path having failed.
+    """

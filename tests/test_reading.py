@@ -12,7 +12,11 @@ from brinss.datasets._reading import (
     resource_encodings,
 )
 from brinss.datasets.enums import ColumnDtype, XlsxEngine
-from brinss.datasets.exceptions import ColumnNotFoundError, UnsupportedArchiveError
+from brinss.datasets.exceptions import (
+    ColumnNotFoundError,
+    MalformedCsvError,
+    UnsupportedArchiveError,
+)
 
 ROWS = [
     {"beneficio": "aposentadoria", "valor": 1500},
@@ -491,3 +495,115 @@ def test_a_sample_cut_mid_character_does_not_reject_utf8(tmp_path, make_csv_byte
     df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
 
     assert df.iloc[-1]["unidade"] == "AVALIAÇÃO SÃO PAULO"
+
+
+# --------------------------------------------------------------------------
+# a header row that disagrees with the records
+# --------------------------------------------------------------------------
+
+# What the INSS shipped for beneficios_mantidos_* in 2026-07: the same fields on
+# both sides, written with a different separator on the header row. Sniffing
+# 64 KiB dominated by the records answers ";", the header parses as one column,
+# and pandas hands the leftover fields to an index that Parquet then drops.
+MISMATCHED = (
+    b"beneficio,cid10,uf,valor\r\n"
+    b"APOSENTADORIA;ZERADO;SAO PAULO;1500\r\n"
+    b"AUXILIO-RECLUSAO;ZERADO;PARAIBA;900\r\n"
+)
+
+
+def test_a_comma_header_over_semicolon_records_keeps_every_column(tmp_path):
+    path = _write(tmp_path, "res.csv", MISMATCHED)
+
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "cid10", "uf", "valor"]
+    assert df.loc[0, "beneficio"] == "APOSENTADORIA"
+    assert df.loc[1, "uf"] == "PARAIBA"
+    assert df.loc[1, "valor"] == "900"
+
+
+def test_the_chunked_path_repairs_the_header_the_same_way(tmp_path):
+    path = _write(tmp_path, "res.csv", MISMATCHED)
+
+    combined = pd.concat(_all_chunks(path), ignore_index=True)
+
+    pd.testing.assert_frame_equal(
+        combined, read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+    )
+    assert list(combined["beneficio"]) == ["APOSENTADORIA", "AUXILIO-RECLUSAO"]
+
+
+def test_the_repair_is_announced_as_a_warning(tmp_path, brinss_logs):
+    path = _write(tmp_path, "res.csv", MISMATCHED)
+
+    read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    warnings = [record.getMessage() for record in brinss_logs.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "res.csv" in warnings[0]
+    assert "','" in warnings[0] and "';'" in warnings[0]
+
+
+def test_the_repair_survives_a_quoted_field_holding_the_other_delimiter(tmp_path):
+    path = _write(
+        tmp_path,
+        "res.csv",
+        b'beneficio,"motivo; e detalhe",valor\r\nAPOSENTADORIA;OBITO;1500\r\n',
+    )
+
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "motivo; e detalhe", "valor"]
+    assert df.loc[0, "valor"] == "1500"
+
+
+def test_a_tab_delimited_body_under_a_comma_header_is_repaired_too(tmp_path):
+    path = _write(
+        tmp_path,
+        "res.csv",
+        b"beneficio,cid10,uf,valor\r\nAPOSENTADORIA\tZERADO\tSP\t1500\r\n",
+    )
+
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "cid10", "uf", "valor"]
+    assert df.loc[0, "uf"] == "SP"
+
+
+def test_the_repair_still_honours_a_column_subset(tmp_path):
+    path = _write(tmp_path, "res.csv", MISMATCHED)
+
+    df = read_resource(path, _entry(), columns=["beneficio", "valor"], engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert list(df["valor"]) == ["1500", "900"]
+
+
+# No candidate splits this header into the 4 fields the records have, so there is
+# nothing to repair -- and guessing would be worse than failing.
+UNREPAIRABLE = b"beneficio|cid10\r\nAPOSENTADORIA;ZERADO;SP;1500\r\n"
+
+
+def test_an_unrepairable_mismatch_raises_instead_of_losing_columns(tmp_path):
+    path = _write(tmp_path, "res.csv", UNREPAIRABLE)
+
+    with pytest.raises(MalformedCsvError, match="res.csv"):
+        read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+
+def test_an_unrepairable_mismatch_raises_on_the_chunked_path_too(tmp_path):
+    path = _write(tmp_path, "res.csv", UNREPAIRABLE)
+
+    with pytest.raises(MalformedCsvError):
+        _all_chunks(path)
+
+
+@pytest.mark.parametrize("delimiter", [";", ",", "\t", "|"])
+def test_a_well_formed_csv_is_read_exactly_as_before(tmp_path, make_csv_bytes, delimiter):
+    path = _write(tmp_path, "res.csv", make_csv_bytes(ROWS, delimiter=delimiter))
+
+    df = read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+
+    assert list(df.columns) == ["periodo_referencia", "beneficio", "valor"]
+    assert list(df["beneficio"]) == ["aposentadoria", "auxilio"]
