@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from . import _log
 from ._catalog import ResourceEntry
@@ -336,7 +337,7 @@ def _pandas_read_kwargs(columns: list[str] | None, dtype: ColumnDtype) -> dict:
     return kwargs
 
 
-def _excel_header_row(source: Path | io.BytesIO, *, engine_name: str) -> int:
+def _excel_header_row(workbook: pd.ExcelFile) -> int:
     """Return the index of the row holding the real column names.
 
     ``beneficios_concedidos`` and ``beneficios_indeferidos`` publish sheets
@@ -349,10 +350,7 @@ def _excel_header_row(source: Path | io.BytesIO, *, engine_name: str) -> int:
     fills more than one cell. Sheets that start with a proper header, like
     ``perfil_unidades``, land on row 0 and read exactly as before.
     """
-    preview = pd.read_excel(source, engine=engine_name, header=None, nrows=_HEADER_SCAN_ROWS)
-    if hasattr(source, "seek"):
-        source.seek(0)  # a BytesIO from _open_source is left at EOF by the peek
-
+    preview = workbook.parse(header=None, nrows=_HEADER_SCAN_ROWS)
     for index in range(len(preview)):
         if preview.iloc[index].notna().sum() > 1:
             return index
@@ -379,19 +377,36 @@ def _read_parquet(path: Path, *, columns: list[str] | None, dtype: ColumnDtype) 
     The mirror stores ``periodo_referencia`` as a "YYYY-MM" string -- Parquet
     would otherwise carry the pandas Period as an extension type over the
     month's ordinal (2024-06 becomes 653), which every reader that is not
-    pandas would show as that integer. It is dropped here so ``read_resource``
+    pandas would show as that integer. It is left out here so ``read_resource``
     can insert the real ``pd.Period`` back, exactly as it does for the portal.
     """
     try:
-        frame = pd.read_parquet(path, columns=columns)
+        frame = pd.read_parquet(path, columns=_parquet_read_columns(path, columns))
     except (ValueError, KeyError) as exc:
         # pyarrow reports a missing column as ArrowInvalid, a ValueError.
         if columns is not None:
             raise ColumnNotFoundError(str(exc)) from exc
         raise
 
+    # Normally already absent (see _parquet_read_columns); this covers the one
+    # case where it has to be read after all.
     frame = frame.drop(columns=[_PERIOD_COLUMN], errors="ignore")
     return _infer_types(frame) if dtype is ColumnDtype.INFER else frame
+
+
+def _parquet_read_columns(path: Path, columns: list[str] | None) -> list[str]:
+    """The columns to ask the reader for: the requested ones, minus ``periodo_referencia``.
+
+    The stored period column is dropped as soon as it is read, and on a month
+    of tens of millions of rows reading it means materializing that many
+    strings just to throw them away. So it is left out of the read -- except
+    when nothing else is left to ask for, as in ``columns=["periodo_referencia"]``:
+    a projection to no columns loses the row count on a file written from
+    pandas, and the period column is what keeps it.
+    """
+    names = pq.read_schema(path).names if columns is None else columns  # the footer only
+    wanted = [name for name in names if name != _PERIOD_COLUMN]
+    return wanted or [_PERIOD_COLUMN]
 
 
 def _infer_types(frame: pd.DataFrame) -> pd.DataFrame:
@@ -411,8 +426,11 @@ def _infer_types(frame: pd.DataFrame) -> pd.DataFrame:
     duplicate column names in code/description pairs, which pandas hands back
     as ``APS`` and ``APS.1`` from a CSV but which arrive from Parquet exactly
     as the source spelled them.
+
+    The copy is shallow: under pandas copy-on-write, replacing a column in it
+    leaves the caller's frame alone without duplicating the whole month.
     """
-    frame = frame.copy()
+    frame = frame.copy(deep=False)
     for position in range(len(frame.columns)):
         try:
             frame.isetitem(position, pd.to_numeric(frame.iloc[:, position]))
@@ -424,14 +442,21 @@ def _infer_types(frame: pd.DataFrame) -> pd.DataFrame:
 def _read_excel(
     source: Path | io.BytesIO, *, columns: list[str] | None, engine_name: str, dtype: ColumnDtype
 ) -> pd.DataFrame:
-    header = _excel_header_row(source, engine_name=engine_name)
+    """Read a spreadsheet, opening the workbook once for both the header peek and the read.
+
+    Two ``pd.read_excel`` calls would load it twice. On an XLSX that repeats
+    little (the peek measured 0.13 s against 134 s for the read), but xlrd
+    parses a legacy .xls whole as soon as it opens it.
+    """
     read_kwargs = _pandas_read_kwargs(columns, dtype)
-    try:
-        return pd.read_excel(source, engine=engine_name, header=header, **read_kwargs)
-    except ValueError as exc:
-        if columns is not None:
-            raise ColumnNotFoundError(str(exc)) from exc
-        raise
+    with pd.ExcelFile(source, engine=engine_name) as workbook:
+        header = _excel_header_row(workbook)
+        try:
+            return workbook.parse(header=header, **read_kwargs)
+        except ValueError as exc:
+            if columns is not None:
+                raise ColumnNotFoundError(str(exc)) from exc
+            raise
 
 
 def _read_sample(open_stream: Callable[[], BinaryIO]) -> tuple[bytes, bool]:

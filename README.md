@@ -166,8 +166,11 @@ hashes. Carregar o mesmo mês pelas duas fontes deixa as duas cópias em disco.
 
 O portal não publica checksum dos arquivos; no primeiro download o SHA256 é
 calculado e guardado localmente, e passa a ser conferido nas chamadas
-seguintes (detectando automaticamente se o governo trocar o conteúdo de um
-arquivo sem trocar o nome).
+seguintes. Essa conferência é da cópia local: detecta um arquivo corrompido ou
+truncado no cache, mas não consulta o servidor, então não percebe se o governo
+trocar o conteúdo de um arquivo sem trocar o nome. Nesse caso, passe
+`force_download=True`. Já um mês que o portal republica como recurso novo, com
+outro identificador, é baixado de novo sozinho, porque ganha outro nome no cache.
 
 O catálogo de períodos disponíveis também fica em cache por 24h, nas duas
 fontes: a resposta da CKAN na fonte `inss`, o `manifest.json` na fonte `hf`.
