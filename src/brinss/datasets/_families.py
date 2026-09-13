@@ -10,10 +10,12 @@ class DatasetFamily:
     """One logical dataset family, backed by one or more CKAN package slugs.
 
     ``slugs`` is ordered oldest-coverage first, current/rolling package last.
-    Today every family has a single slug (v1 covers only the current
-    "Plano de Dados Abertos jun-2023 em diante" packages, all monthly XLSX).
-    Older sibling packages exist on the portal but use yearly ZIP archives
-    instead of monthly XLSX and are intentionally out of scope for now; the
+    Today every family has a single slug, each a package that publishes one
+    resource per month from jun-2023 on -- most of them the "Plano de Dados
+    Abertos" packages, the staff ones ("pessoal_*", "ocupantes_*") packages of
+    their own. The monthly files come as XLSX, ZIP or plain CSV; ``_reading.py``
+    tells them apart by content. Older sibling packages exist on the portal but
+    use yearly ZIP archives and are intentionally out of scope for now; the
     tuple shape is kept so they can be appended later without changing
     ``_catalog.py``'s merge logic.
 
@@ -77,5 +79,30 @@ FAMILIES: dict[str, DatasetFamily] = {
         key="perfil_unidades",
         title="Perfil das unidades do INSS",
         slugs=("perfil-das-unidades-plano-de-dados-abertos-jun-2023-a-jun-2025",),
+    ),
+    "pessoal_ativo_consolidado": DatasetFamily(
+        key="pessoal_ativo_consolidado",
+        title="Quadro de Pessoal em atividade consolidado",
+        slugs=("quadro-de-pessoal-em-atividade-consolidado",),
+    ),
+    "ocupantes_funcoes_cargos": DatasetFamily(
+        key="ocupantes_funcoes_cargos",
+        title="Ocupantes de funções e cargos",
+        slugs=("ocupantes-de-funcoes-e-cargos",),
+    ),
+    "pessoal_sem_identificacao": DatasetFamily(
+        key="pessoal_sem_identificacao",
+        title="Dados do quadro de Pessoal sem identificação",
+        slugs=("dados-do-quadro-de-pessoal-sem-identificacao",),
+    ),
+    "requerimentos_solicitados": DatasetFamily(
+        key="requerimentos_solicitados",
+        title="Requerimentos administrativos solicitados",
+        slugs=("dados-de-requerimentos-administrativos-solicitados-plano-de-dados-abertos-jun-2023-a-jun-2025",),
+    ),
+    "requerimentos_pendentes": DatasetFamily(
+        key="requerimentos_pendentes",
+        title="Requerimentos administrativos pendentes de análise",
+        slugs=("dados-de-requerimentos-administrativos-pendentes-plano-de-dados-abertos-jun-2023-a-jun-2025",),
     ),
 }

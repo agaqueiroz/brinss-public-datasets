@@ -11,6 +11,11 @@ EXPECTED_FAMILY_KEYS = {
     "beneficios_indeferidos",
     "comunicacoes_acidente_trabalho",
     "perfil_unidades",
+    "pessoal_ativo_consolidado",
+    "ocupantes_funcoes_cargos",
+    "pessoal_sem_identificacao",
+    "requerimentos_solicitados",
+    "requerimentos_pendentes",
 }
 
 
@@ -35,6 +40,11 @@ def test_load_wrappers_delegate_to_load_dataset_with_the_right_family_key(monkey
     assert ds.load_beneficios_indeferidos() == "ok"
     assert ds.load_comunicacoes_acidente_trabalho() == "ok"
     assert ds.load_perfil_unidades() == "ok"
+    assert ds.load_pessoal_ativo_consolidado() == "ok"
+    assert ds.load_ocupantes_funcoes_cargos() == "ok"
+    assert ds.load_pessoal_sem_identificacao() == "ok"
+    assert ds.load_requerimentos_solicitados() == "ok"
+    assert ds.load_requerimentos_pendentes() == "ok"
 
     assert set(calls) == EXPECTED_FAMILY_KEYS
 
