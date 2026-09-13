@@ -75,9 +75,10 @@ def test_read_resource_logs_start_and_finish(tmp_path, make_csv_bytes, brinss_lo
 
     _reading.read_resource(path, _entry("https://fixtures.test/x.csv"), columns=None, engine=XlsxEngine.OPENPYXL)
 
-    start, finish = _messages(brinss_logs)
+    start, dialect, finish = _messages(brinss_logs)
     assert start.startswith("Reading 'concedidos.csv'")
     assert start.endswith("into a DataFrame...")
+    assert dialect == "CSV dialect for 'concedidos.csv': delimiter=';', encoding='utf-8-sig'."
     # 3 rows, and 3 columns counting the periodo_referencia the reader inserts
     assert finish.startswith("DataFrame loaded: 3 rows x 3 columns from 'concedidos.csv' in ")
 

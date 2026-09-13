@@ -9,7 +9,12 @@ from brinss.datasets import (
     load_beneficios_mantidos_suspensos,
     load_comunicacoes_acidente_trabalho,
     load_dataset,
+    load_ocupantes_funcoes_cargos,
     load_perfil_unidades,
+    load_pessoal_ativo_consolidado,
+    load_pessoal_sem_identificacao,
+    load_requerimentos_pendentes,
+    load_requerimentos_solicitados,
 )
 
 __all__ = [
@@ -23,5 +28,10 @@ __all__ = [
     "load_beneficios_mantidos_suspensos",
     "load_comunicacoes_acidente_trabalho",
     "load_dataset",
+    "load_ocupantes_funcoes_cargos",
     "load_perfil_unidades",
+    "load_pessoal_ativo_consolidado",
+    "load_pessoal_sem_identificacao",
+    "load_requerimentos_pendentes",
+    "load_requerimentos_solicitados",
 ]

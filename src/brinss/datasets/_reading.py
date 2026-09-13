@@ -6,6 +6,7 @@ import csv
 import io
 import time
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -16,7 +17,7 @@ import pandas as pd
 from . import _log
 from ._catalog import ResourceEntry
 from .enums import ColumnDtype, XlsxEngine
-from .exceptions import ColumnNotFoundError, UnsupportedArchiveError
+from .exceptions import ColumnNotFoundError, MalformedCsvError, UnsupportedArchiveError
 
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE2/Compound File signature (legacy .xls)
 _PARQUET_MAGIC = b"PAR1"  # opens and closes every Parquet file
@@ -28,6 +29,8 @@ _DECODE_CHUNK_SIZE = 1 << 20
 _UTF16_BOMS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
 _HEADER_SCAN_ROWS = 10
 _TABULAR_SUFFIXES = (".csv", ".xlsx", ".xlsm", ".xls")
+_DELIMITERS = ";,\t|"
+_LAYOUT_SCAN_ROWS = 20
 
 
 @dataclass(frozen=True)
@@ -103,7 +106,9 @@ def read_resource(
     try:
         with _open_source(path, engine=engine) as source:
             if isinstance(source, _CsvSource):
-                frame = _read_csv_stream(source.open_stream, columns=columns, dtype=dtype)
+                frame = _read_csv_stream(
+                    source.open_stream, columns=columns, dtype=dtype, name=path.name
+                )
             else:
                 frame = _read_whole(source, columns=columns, dtype=dtype)
     except ColumnNotFoundError as exc:
@@ -191,6 +196,7 @@ def open_resource_chunks(
             dtype=dtype,
             encoding=encoding,
             chunk_rows=chunk_rows,
+            name=path.name,
         )
         try:
             yield chunks
@@ -315,7 +321,9 @@ def _pick_data_member(names: list[str], *, archive_name: str) -> str:
 
 
 def _pandas_read_kwargs(columns: list[str] | None, dtype: ColumnDtype) -> dict:
-    """Build the kwargs shared by both ``pd.read_*`` calls.
+    """Build the kwargs the spreadsheet read and the CSV read have in common.
+
+    The CSV side adds its dialect on top of these; see ``_csv_read_kwargs``.
 
     ``dtype=str`` still leaves empty cells as ``NaN`` rather than ``""``, so
     ``.isna()`` keeps working the way pandas users expect.
@@ -439,18 +447,155 @@ def _read_sample(open_stream: Callable[[], BinaryIO]) -> tuple[bytes, bool]:
     return sample[:_ENCODING_SAMPLE_SIZE], truncated
 
 
-def _csv_dialect(open_stream: Callable[[], BinaryIO], encoding: str | None) -> tuple[list[str], str]:
-    """Return the encodings worth trying and the delimiter, from one sample."""
+@dataclass(frozen=True)
+class _CsvDialect:
+    """How to hand one CSV to pandas: what to decode it as, and how to split it.
+
+    ``names`` is filled in only for the malformed case ``_csv_layout``
+    describes -- a file whose header row uses a different delimiter from its
+    records. Everywhere else it stays None and the read is the plain one.
+    """
+
+    encodings: list[str]
+    delimiter: str  # the one the RECORDS use
+    names: list[str] | None = None
+    header_delimiter: str | None = None  # set alongside ``names``, for the warning
+
+
+def _split_fields(line: str, delimiter: str) -> list[str]:
+    """One line's fields under one delimiter, honouring quotes."""
+    return next(csv.reader([line], delimiter=delimiter), [])
+
+
+def _record_width(records: list[str], delimiter: str) -> int:
+    """How many fields this delimiter gets out of the records, or 0 if they disagree.
+
+    The count has to hold for most of the sampled records, not just the first
+    one: under the wrong delimiter the counts scatter, which is exactly what
+    tells the right one apart from a candidate that happened to appear in a
+    single value.
+    """
+    counts = Counter(len(_split_fields(record, delimiter)) for record in records)
+    width, support = counts.most_common(1)[0]
+    return width if support * 2 > len(records) else 0
+
+
+def _csv_layout(
+    sample_text: str, sniffed: str, *, cut: bool
+) -> tuple[str, list[str] | None, str | None]:
+    """The records' delimiter, and the column names when the header uses another one.
+
+    The INSS published ``beneficios_mantidos_*`` for 2026-07 with a header row
+    separated by commas over records separated by semicolons -- 17 fields on
+    both sides, two different characters. Sniffing looks at 64 KiB dominated by
+    the records, answers ";", and the header then parses as a single column;
+    pandas quietly promotes the 16 leftover fields of every record to an index,
+    and writing that to Parquet drops 16 of the 17 columns without a word.
+
+    So the records are asked first, by field count rather than by a second
+    sniff: asking ``csv.Sniffer`` about one line is unreliable and often just
+    raises. Whatever splits the records consistently is the real delimiter, and
+    the header is then reconciled against it. Only a header that no single
+    candidate can line up with the records is left alone -- guessing there would
+    be worse than the loud failure ``_reject_promoted_index`` raises instead.
+
+    The common case is the first branch: header and records already agree, and
+    nothing about the read changes.
+    """
+    lines = [line for line in sample_text.splitlines() if line]
+    # The sample ends wherever the read stopped, so its last line is only half a
+    # record when the file did not fit -- counting fields on it would be noise.
+    records = (lines[1:-1] if cut else lines[1:])[:_LAYOUT_SCAN_ROWS]
+    if not records:
+        return sniffed, None, None
+
+    header = lines[0]
+    widths = {candidate: _record_width(records, candidate) for candidate in _DELIMITERS}
+
+    agreed = [c for c, width in widths.items() if width > 1 and len(_split_fields(header, c)) == width]
+    if agreed:
+        return (sniffed if sniffed in agreed else agreed[0]), None, None
+
+    width = max(widths.values())
+    if width < 2:
+        return sniffed, None, None  # a genuinely single-column file
+    body = [c for c, other in widths.items() if other == width]
+    delimiter = sniffed if sniffed in body else body[0] if len(body) == 1 else None
+    if delimiter is None:
+        return sniffed, None, None
+
+    matches = [c for c in _DELIMITERS if c != delimiter and len(_split_fields(header, c)) == width]
+    if len(matches) != 1:
+        return delimiter, None, None
+    return delimiter, _split_fields(header, matches[0]), matches[0]
+
+
+def _csv_dialect(
+    open_stream: Callable[[], BinaryIO], encoding: str | None, *, name: str
+) -> _CsvDialect:
+    """Work out from one sample how this CSV has to be read."""
     sample, truncated = _read_sample(open_stream)
     encodings = [encoding] if encoding is not None else _encoding_candidates(sample, truncated)
     # The cut may land inside a character; errors="replace" is harmless here,
-    # since the sniffer only ever looks at the delimiter candidates.
-    delimiter = _detect_delimiter(sample[:_SAMPLE_SIZE].decode(encodings[0], errors="replace"))
-    return encodings, delimiter
+    # since only the delimiter candidates are ever looked at.
+    sample_text = sample[:_SAMPLE_SIZE].decode(encodings[0], errors="replace")
+    delimiter, names, header_delimiter = _csv_layout(
+        sample_text, _detect_delimiter(sample_text), cut=truncated or len(sample) > _SAMPLE_SIZE
+    )
+
+    logger = _log.get_logger()
+    logger.info("CSV dialect for '%s': delimiter=%r, encoding=%r.", name, delimiter, encodings[0])
+    if names is not None:
+        logger.warning(
+            "'%s' separates its header row differently from its records: %d column names "
+            "read with %r, records read with %r. Using the names from the header row.",
+            name,
+            len(names),
+            header_delimiter,
+            delimiter,
+        )
+    return _CsvDialect(
+        encodings=encodings, delimiter=delimiter, names=names, header_delimiter=header_delimiter
+    )
+
+
+def _csv_read_kwargs(dialect: _CsvDialect, columns: list[str] | None, dtype: ColumnDtype) -> dict:
+    """The kwargs for a CSV read, including the repair when there is one."""
+    kwargs = _pandas_read_kwargs(columns, dtype)
+    kwargs["sep"] = dialect.delimiter
+    if dialect.names is not None:
+        # The header row cannot be parsed with the records' delimiter, so it is
+        # skipped and replaced by the names already recovered from it.
+        kwargs["names"] = dialect.names
+        kwargs["header"] = None
+        kwargs["skiprows"] = 1
+    return kwargs
+
+
+def _reject_promoted_index(frame: pd.DataFrame, *, name: str) -> pd.DataFrame:
+    """Refuse a frame whose extra columns pandas turned into an index.
+
+    That promotion is how a delimiter mismatch destroys data without raising:
+    records wider than the header lose their leading fields to an index, and
+    ``to_parquet``/``pa.Table.from_pandas`` drop it. Nothing downstream can tell
+    the difference between that and a file that really had one column, so the
+    read stops here instead.
+
+    Only the CSV path calls this; the Excel and Parquet readers always hand back
+    a RangeIndex.
+    """
+    if frame.index.nlevels > 1 or not isinstance(frame.index, pd.RangeIndex):
+        raise MalformedCsvError(
+            f"'{name}' nao pode ser lido sem perda: o cabecalho declara "
+            f"{len(frame.columns)} coluna(s), mas os registros trazem "
+            f"{len(frame.columns) + frame.index.nlevels}. O pandas promoveu a diferenca "
+            "a indice, e gravar assim descartaria essas colunas em silencio."
+        )
+    return frame
 
 
 def _read_csv_stream(
-    open_stream: Callable[[], BinaryIO], *, columns: list[str] | None, dtype: ColumnDtype
+    open_stream: Callable[[], BinaryIO], *, columns: list[str] | None, dtype: ColumnDtype, name: str
 ) -> pd.DataFrame:
     """Read a CSV whole, retrying if the sampled encoding is disproved.
 
@@ -458,13 +603,15 @@ def _read_csv_stream(
     fallback is invisible from the outside -- unlike the chunked path, which
     has to be restarted by its caller.
     """
-    encodings, delimiter = _csv_dialect(open_stream, None)
-    read_kwargs = _pandas_read_kwargs(columns, dtype)
+    dialect = _csv_dialect(open_stream, None, name=name)
+    read_kwargs = _csv_read_kwargs(dialect, columns, dtype)
+    encodings = dialect.encodings
 
     for position, encoding in enumerate(encodings):
         try:
             with open_stream() as handle:
-                return pd.read_csv(handle, sep=delimiter, encoding=encoding, **read_kwargs)
+                frame = pd.read_csv(handle, encoding=encoding, **read_kwargs)
+            return _reject_promoted_index(frame, name=name)
         except UnicodeDecodeError:
             # Caught before the ValueError below on purpose: UnicodeDecodeError
             # is one, and reporting it as a missing column would bury the cause.
@@ -491,17 +638,22 @@ def _iter_csv_chunks(
     dtype: ColumnDtype,
     encoding: str | None,
     chunk_rows: int,
+    name: str,
 ) -> Iterator[pd.DataFrame]:
     """Yield the CSV a chunk at a time, with the period column on each one."""
-    encodings, delimiter = _csv_dialect(open_stream, encoding)
-    read_kwargs = _pandas_read_kwargs(columns, dtype)
+    dialect = _csv_dialect(open_stream, encoding, name=name)
+    read_kwargs = _csv_read_kwargs(dialect, columns, dtype)
 
     with open_stream() as handle:
         try:
             reader = pd.read_csv(
-                handle, sep=delimiter, encoding=encodings[0], chunksize=chunk_rows, **read_kwargs
+                handle, encoding=dialect.encodings[0], chunksize=chunk_rows, **read_kwargs
             )
             for chunk in reader:
+                # Every chunk, not just the first: the check is one isinstance
+                # on the index, and a file that widens halfway through would
+                # otherwise slip past a first-chunk-only guard.
+                _reject_promoted_index(chunk, name=name)
                 chunk.insert(0, _PERIOD_COLUMN, entry.period)
                 yield chunk
         except UnicodeDecodeError:

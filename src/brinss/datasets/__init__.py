@@ -58,6 +58,7 @@ from .exceptions import (
     CkanUnavailableError,
     ColumnNotFoundError,
     HuggingFaceUnavailableError,
+    MalformedCsvError,
     PeriodError,
     PeriodUnavailableError,
     UnsupportedArchiveError,
@@ -70,6 +71,7 @@ __all__ = [
     "ColumnNotFoundError",
     "DataSource",
     "HuggingFaceUnavailableError",
+    "MalformedCsvError",
     "PeriodError",
     "PeriodUnavailableError",
     "PeriodoLike",
@@ -86,7 +88,12 @@ __all__ = [
     "load_beneficios_mantidos_suspensos",
     "load_comunicacoes_acidente_trabalho",
     "load_dataset",
+    "load_ocupantes_funcoes_cargos",
     "load_perfil_unidades",
+    "load_pessoal_ativo_consolidado",
+    "load_pessoal_sem_identificacao",
+    "load_requerimentos_pendentes",
+    "load_requerimentos_solicitados",
 ]
 
 
@@ -131,3 +138,23 @@ def load_comunicacoes_acidente_trabalho(
 
 def load_perfil_unidades(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
     return load_dataset("perfil_unidades", periodo, **kwargs)
+
+
+def load_pessoal_ativo_consolidado(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("pessoal_ativo_consolidado", periodo, **kwargs)
+
+
+def load_ocupantes_funcoes_cargos(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("ocupantes_funcoes_cargos", periodo, **kwargs)
+
+
+def load_pessoal_sem_identificacao(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("pessoal_sem_identificacao", periodo, **kwargs)
+
+
+def load_requerimentos_solicitados(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("requerimentos_solicitados", periodo, **kwargs)
+
+
+def load_requerimentos_pendentes(periodo: PeriodoLike = None, **kwargs) -> pd.DataFrame | dict[str, pd.DataFrame]:
+    return load_dataset("requerimentos_pendentes", periodo, **kwargs)

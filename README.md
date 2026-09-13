@@ -1,5 +1,11 @@
 # brinss-public-datasets
 
+## AVISO LEGAL
+
+Este é um projeto pessoal, não oficial, e para fins de estudos, sem garantias de atualização e tem com fonte única, sem alterações, os Portais de Dados Abertos do Governo Federal.
+
+## Sobre o Projeto
+
 [![PyPI](https://img.shields.io/pypi/v/brinss-public-datasets)](https://pypi.org/project/brinss-public-datasets/)
 [![Python](https://img.shields.io/pypi/pyversions/brinss-public-datasets)](https://pypi.org/project/brinss-public-datasets/)
 [![CI](https://github.com/agaqueiroz/brinss-public-datasets/actions/workflows/ci.yml/badge.svg)](https://github.com/agaqueiroz/brinss-public-datasets/actions/workflows/ci.yml)
@@ -53,6 +59,11 @@ Datasets disponíveis (`brinss.datasets.list_datasets()`):
 | `load_beneficios_indeferidos` | Benefícios indeferidos |
 | `load_comunicacoes_acidente_trabalho` | Comunicações de Acidente de Trabalho (CAT) |
 | `load_perfil_unidades` | Perfil das unidades do INSS |
+| `load_requerimentos_solicitados` | Requerimentos administrativos solicitados |
+| `load_requerimentos_pendentes` | Requerimentos administrativos pendentes de análise |
+| `load_pessoal_ativo_consolidado` | Quadro de pessoal em atividade consolidado |
+| `load_ocupantes_funcoes_cargos` | Ocupantes de funções e cargos |
+| `load_pessoal_sem_identificacao` | Dados do quadro de pessoal sem identificação |
 
 Todas aceitam os mesmos parâmetros de `load_dataset`:
 
@@ -115,8 +126,10 @@ Vale usar `source="inss"` quando:
   fonte `hf`, e a mensagem de erro lembra de tentar a outra;
 - você quer auditar o espelho contra a origem oficial.
 
-O espelho cobre hoje as 8 famílias, de junho/2023 a julho/2026. Para ver o que
-cada fonte tem, `list_periods` também aceita `source`:
+O espelho cobre hoje as 13 famílias, a partir de junho/2023 (agosto/2023 em
+`requerimentos_pendentes`) e até o mês mais recente que cada uma publica — que
+não é o mesmo para todas, e o portal também tem meses faltando em algumas
+famílias. Para ver o que cada fonte tem, `list_periods` também aceita `source`:
 
 ```python
 from brinss.datasets import list_periods
