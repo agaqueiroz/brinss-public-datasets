@@ -58,7 +58,7 @@ class _ExcelSource:
 
 @dataclass(frozen=True)
 class _ParquetSource:
-    """A Parquet file from the Hugging Face mirror, read whole but column by column."""
+    """A Parquet file from the Hugging Face mirror, read column by column, whole or in batches."""
 
     source: Path
 
@@ -164,20 +164,20 @@ def open_resource_chunks(
     caller that has to restart a conversion after the first choice was
     disproved mid-read; see ``resource_encodings``.
 
-    A resource that pandas can only read whole -- a spreadsheet, or a Parquet
-    from the mirror -- yields exactly one chunk, so a caller written against
-    this needs only the one code path.
+    A Parquet from the mirror is streamed a batch at a time, like a CSV; only
+    a spreadsheet, which pandas can only read whole, yields exactly one chunk,
+    so a caller written against this needs only the one code path.
+    ``encoding`` does not apply to either.
     """
     dtype = ColumnDtype(dtype)
     logger = _log.get_logger()
 
     with _open_source(path, engine=engine) as source:
-        if not isinstance(source, _CsvSource):
+        if isinstance(source, _ExcelSource):
             logger.info(
-                "Reading '%s' (%s) as a single chunk (%s)...",
+                "Reading '%s' (%s) as a single chunk (spreadsheet)...",
                 path.name,
                 _log.format_bytes(path.stat().st_size),
-                "parquet" if isinstance(source, _ParquetSource) else "spreadsheet",
             )
             frame = _read_whole(source, columns=columns, dtype=dtype)
             frame.insert(0, _PERIOD_COLUMN, entry.period)
@@ -190,15 +190,20 @@ def open_resource_chunks(
             _log.format_bytes(path.stat().st_size),
             f"{chunk_rows:,}",
         )
-        chunks = _iter_csv_chunks(
-            source.open_stream,
-            entry,
-            columns=columns,
-            dtype=dtype,
-            encoding=encoding,
-            chunk_rows=chunk_rows,
-            name=path.name,
-        )
+        if isinstance(source, _ParquetSource):
+            chunks = _iter_parquet_chunks(
+                source.source, entry, columns=columns, dtype=dtype, chunk_rows=chunk_rows
+            )
+        else:
+            chunks = _iter_csv_chunks(
+                source.open_stream,
+                entry,
+                columns=columns,
+                dtype=dtype,
+                encoding=encoding,
+                chunk_rows=chunk_rows,
+                name=path.name,
+            )
         try:
             yield chunks
         finally:
@@ -208,7 +213,8 @@ def open_resource_chunks(
             # refcount on the member stream then keeps the archive's descriptor
             # open despite ZipFile.close(). On Windows that is enough to make
             # deleting the file fail. This unwinds it at a defined moment
-            # instead of whenever the collector gets there.
+            # instead of whenever the collector gets there. The same goes for
+            # the handle a suspended Parquet read holds.
             chunks.close()
 
 
@@ -360,7 +366,7 @@ def _excel_header_row(workbook: pd.ExcelFile) -> int:
 def _read_whole(
     source: _ExcelSource | _ParquetSource, *, columns: list[str] | None, dtype: ColumnDtype
 ) -> pd.DataFrame:
-    """Read a source pandas cannot stream, whichever of the two it is."""
+    """Read a spreadsheet or a Parquet whole, whichever of the two it is."""
     if isinstance(source, _ParquetSource):
         return _read_parquet(source.source, columns=columns, dtype=dtype)
     return _read_excel(source.source, columns=columns, engine_name=source.engine_name, dtype=dtype)
@@ -380,22 +386,73 @@ def _read_parquet(path: Path, *, columns: list[str] | None, dtype: ColumnDtype) 
     pandas would show as that integer. It is left out here so ``read_resource``
     can insert the real ``pd.Period`` back, exactly as it does for the portal.
     """
+    requested = columns if columns is not None else pq.read_schema(path).names  # the footer only
     try:
-        frame = pd.read_parquet(path, columns=_parquet_read_columns(path, columns))
+        frame = pd.read_parquet(path, columns=_parquet_read_columns(requested))
     except (ValueError, KeyError) as exc:
         # pyarrow reports a missing column as ArrowInvalid, a ValueError.
         if columns is not None:
             raise ColumnNotFoundError(str(exc)) from exc
         raise
 
+    return _finish_parquet_frame(frame, dtype)
+
+
+def _iter_parquet_chunks(
+    path: Path,
+    entry: ResourceEntry,
+    *,
+    columns: list[str] | None,
+    dtype: ColumnDtype,
+    chunk_rows: int,
+) -> Iterator[pd.DataFrame]:
+    """Yield the Parquet a batch at a time, with the period column on each one.
+
+    Each chunk gets the same treatment ``_read_parquet`` gives the whole file,
+    so concatenating the chunks lands on exactly what ``read_resource`` returns.
+    A batch can span row groups; ``chunk_rows`` is only an upper bound.
+
+    Missing columns are checked against the schema up front, because the
+    batch reader does not check them at all: asked for a column that does not
+    exist, it quietly hands back batches with no columns.
+    """
+    with pq.ParquetFile(path) as parquet:
+        schema = parquet.schema_arrow
+        if columns is not None:
+            missing = [name for name in columns if name not in schema.names]
+            if missing:
+                raise ColumnNotFoundError(f"colunas ausentes no arquivo: {missing!r}")
+        read_columns = _parquet_read_columns(columns if columns is not None else schema.names)
+
+        offset = 0
+        for batch in parquet.iter_batches(batch_size=chunk_rows, columns=read_columns):
+            frame = _finish_parquet_frame(batch.to_pandas(), dtype)
+            # Numbered on from the previous chunk, as read_csv's chunks are.
+            frame.index = pd.RangeIndex(offset, offset + len(frame))
+            offset += len(frame)
+            frame.insert(0, _PERIOD_COLUMN, entry.period)
+            yield frame
+
+        if offset == 0:
+            # A file with no rows yields no batch at all; hand back one empty
+            # chunk with the right columns instead, the way read_csv does.
+            frame = _finish_parquet_frame(schema.empty_table().select(read_columns).to_pandas(), dtype)
+            frame.insert(0, _PERIOD_COLUMN, entry.period)
+            yield frame
+
+
+def _finish_parquet_frame(frame: pd.DataFrame, dtype: ColumnDtype) -> pd.DataFrame:
+    """What every Parquet frame goes through, whole or in chunks, before the period is added."""
     # Normally already absent (see _parquet_read_columns); this covers the one
     # case where it has to be read after all.
     frame = frame.drop(columns=[_PERIOD_COLUMN], errors="ignore")
     return _infer_types(frame) if dtype is ColumnDtype.INFER else frame
 
 
-def _parquet_read_columns(path: Path, columns: list[str] | None) -> list[str]:
-    """The columns to ask the reader for: the requested ones, minus ``periodo_referencia``.
+def _parquet_read_columns(requested: list[str]) -> list[str]:
+    """The columns to ask the reader for: ``requested``, minus ``periodo_referencia``.
+
+    ``requested`` is the caller's ``columns``, or every name in the schema.
 
     The stored period column is dropped as soon as it is read, and on a month
     of tens of millions of rows reading it means materializing that many
@@ -404,8 +461,7 @@ def _parquet_read_columns(path: Path, columns: list[str] | None) -> list[str]:
     a projection to no columns loses the row count on a file written from
     pandas, and the period column is what keeps it.
     """
-    names = pq.read_schema(path).names if columns is None else columns  # the footer only
-    wanted = [name for name in names if name != _PERIOD_COLUMN]
+    wanted = [name for name in requested if name != _PERIOD_COLUMN]
     return wanted or [_PERIOD_COLUMN]
 
 

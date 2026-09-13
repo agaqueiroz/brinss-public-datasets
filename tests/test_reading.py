@@ -505,6 +505,74 @@ def test_chunks_from_a_csv_inside_a_zip_keep_accents(tmp_path, make_csv_zip_byte
     assert combined.loc[1, "unidade"] == "AVALIAÇÃO SÃO PAULO"
 
 
+def test_parquet_chunks_concatenated_match_the_whole_frame(tmp_path, make_parquet_bytes):
+    path = _write(tmp_path, "res.parquet", make_parquet_bytes(ROWS, period="2024-06"))
+
+    chunks = _all_chunks(path)
+
+    assert len(chunks) == len(ROWS)
+    for chunk in chunks:
+        assert chunk.columns[0] == "periodo_referencia"
+        assert (chunk["periodo_referencia"] == pd.Period("2024-06", freq="M")).all()
+    # No ignore_index: the chunks carry on each other's numbering, as read_csv's do.
+    pd.testing.assert_frame_equal(
+        pd.concat(chunks), read_resource(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL)
+    )
+
+
+@pytest.mark.parametrize(
+    ("columns", "dtype"),
+    [
+        (["valor", "beneficio"], ColumnDtype.STRING),
+        (["periodo_referencia"], ColumnDtype.STRING),
+        (None, ColumnDtype.INFER),
+    ],
+)
+def test_parquet_chunks_match_the_whole_frame_for_columns_and_dtype(tmp_path, make_parquet_bytes, columns, dtype):
+    path = _write(tmp_path, "res.parquet", make_parquet_bytes(ROWS, period="2024-06"))
+
+    combined = pd.concat(_all_chunks(path, columns=columns, dtype=dtype))
+
+    whole = read_resource(path, _entry(), columns=columns, engine=XlsxEngine.OPENPYXL, dtype=dtype)
+    pd.testing.assert_frame_equal(combined, whole)
+
+
+def test_parquet_chunks_refuse_a_missing_column_before_the_first_chunk(tmp_path, make_parquet_bytes):
+    # The batch reader itself does not check: asked for a column that does not
+    # exist, it hands back batches with no columns at all.
+    path = _write(tmp_path, "res.parquet", make_parquet_bytes(ROWS, period="2024-06"))
+
+    with (
+        pytest.raises(ColumnNotFoundError, match="coluna_inexistente"),
+        open_resource_chunks(
+            path, _entry(), columns=["valor", "coluna_inexistente"], engine=XlsxEngine.OPENPYXL
+        ) as chunks,
+    ):
+        next(chunks)
+
+
+def test_parquet_without_rows_yields_one_empty_chunk(tmp_path):
+    path = tmp_path / "res.parquet"
+    pd.DataFrame({"periodo_referencia": pd.Series([], dtype=str), "valor": pd.Series([], dtype=str)}).to_parquet(
+        path, index=False
+    )
+
+    chunks = _all_chunks(path)
+
+    assert len(chunks) == 1
+    assert list(chunks[0].columns) == ["periodo_referencia", "valor"]
+    assert chunks[0].empty
+
+
+def test_the_parquet_is_closed_when_the_caller_stops_early(tmp_path, make_parquet_bytes):
+    path = _write(tmp_path, "res.parquet", make_parquet_bytes(ROWS, period="2024-06"))
+
+    with open_resource_chunks(path, _entry(), columns=None, engine=XlsxEngine.OPENPYXL, chunk_rows=1) as chunks:
+        next(iter(chunks))  # abandon the rest
+
+    path.unlink()
+
+
 def test_excel_yields_a_single_chunk(tmp_path, make_xlsx_bytes):
     path = _write(tmp_path, "res.xlsx", make_xlsx_bytes(ROWS, banner="BENEFICIOS - JUNHO"))
 

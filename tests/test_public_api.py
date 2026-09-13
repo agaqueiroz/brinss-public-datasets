@@ -78,5 +78,24 @@ def test_load_wrappers_forward_source_to_load_dataset(monkeypatch):
     assert captured["source"] is ds.DataSource.INSS
 
 
+def test_load_wrappers_forward_chunksize_to_load_dataset(monkeypatch):
+    # Same contract as dtype and source: chunksize rides in on **kwargs.
+    captured = {}
+
+    def fake_load_dataset(name, periodo=None, **kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(ds, "load_dataset", fake_load_dataset)
+    ds.load_beneficios_emitidos(periodo="all", chunksize=500_000)
+
+    assert captured["chunksize"] == 500_000
+
+
+def test_streaming_types_are_public():
+    assert issubclass(ds.StreamEncodingError, ds.BrinssError)
+    assert {"DatasetChunks", "StreamEncodingError"} <= set(ds.__all__)
+
+
 def test_get_cache_dir_returns_a_path(tmp_path):
     assert ds.get_cache_dir(tmp_path) == tmp_path
